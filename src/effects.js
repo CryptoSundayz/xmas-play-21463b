@@ -184,6 +184,7 @@ export class Fireworks {
   constructor(scene, particles) { this.scene = scene; this.p = particles; this.rockets = []; this.timer = 0; this.logoTimer = 0.8; this.center = new THREE.Vector3(0, 55, 0); this.facing = new THREE.Vector3(0, 0, 1); }
   launch(x, z, logo = false) {
     this.rockets.push({ pos: new THREE.Vector3(x, 1, z), vel: new THREE.Vector3((Math.random() - 0.5) * 3, 34 + Math.random() * 8, (Math.random() - 0.5) * 3), fuse: logo ? 1.35 : 0.9 + Math.random() * 0.6, logo });
+    this.onLaunch?.(this.rockets[this.rockets.length - 1]);
   }
   explode(r) {
     const cols = [new THREE.Color(1.6, 0.35, 0.4), new THREE.Color(1.6, 1.3, 0.4), new THREE.Color(0.5, 1.6, 0.7), new THREE.Color(1.4, 0.6, 1.6), new THREE.Color(0.4, 1.1, 2.0)];

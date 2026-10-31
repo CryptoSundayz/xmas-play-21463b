@@ -57,9 +57,9 @@ export const CONFIG = {
   // (world units, from the town square) inside which targets are picked.
   // powerups: Optimum pickups spawned on roads; powerupDuration: seconds.
   levels: [
-    { name: 'Genesis Eve',      validators: 6,  timer: 110, areaRadius: 75,  powerups: 2, powerupDuration: 10, weather: 'clear',     ice: false, slowNodes: 0, iceCount: 0 },
-    { name: 'Frosty Finality',  validators: 9,  timer: 130, areaRadius: 120, powerups: 3, powerupDuration: 10, weather: 'lightSnow', ice: true,  slowNodes: 2, iceCount: 10 },
-    { name: 'Silent Slot',      validators: 13, timer: 150, areaRadius: 175, powerups: 3, powerupDuration: 9,  weather: 'storms',    ice: true,  slowNodes: 4, iceCount: 16 },
+    { name: 'Genesis Eve',      validators: 6,  timer: 110, areaRadius: 62,  powerups: 2, powerupDuration: 10, weather: 'clear',     ice: false, slowNodes: 0, iceCount: 0 },
+    { name: 'Frosty Finality',  validators: 9,  timer: 130, areaRadius: 98, powerups: 3, powerupDuration: 10, weather: 'lightSnow', ice: true,  slowNodes: 2, iceCount: 10 },
+    { name: 'Silent Slot',      validators: 13, timer: 150, areaRadius: 125, powerups: 3, powerupDuration: 9,  weather: 'storms',    ice: true,  slowNodes: 4, iceCount: 16 },
   ],
 
   // -------------------------------------------------------------- character
@@ -69,7 +69,8 @@ export const CONFIG = {
     type: 'mascot', // 'mascot' | 'santa'   (URL override: ?character=santa)
     name: 'Optimum Santa', // display name
     storyName: 'Santa Optimum', // used in the title-screen story ("<storyName> is carrying the newest block")
-    jumpVelocity: 5.6, // m/s (Space). Visual jump only - delivery/collision stay on the ground
+    jumpVelocity: 5.6, // m/s celebrate-hop reference (the player jump itself lives in player.jump)
+    grounding: { snowSink: 0.05, footSnap: 25, blobShadow: 0.42, stepPuffs: true, strideSync: true, strideAmpMax: 1.7, runCadenceMax: 3.2 },
     gravity: 16,
     celebrateHop: 3.4, // hop velocity on each delivery
     leanAmount: 0.05, // roll per (rad/s * m/s) of turning
@@ -94,6 +95,11 @@ export const CONFIG = {
     iceFriction: 0.25, // velocity damping on ice (lower = slides longer)
     turnSpeed: 12,
     radius: 0.7,
+    // real jump (Space / JUMP button): clears the snowy picket fences, benches, sleds, snow banks; walls stay solid
+    jump: { velocity: 8.2, gravity: 22, coyoteTime: 0.12, bufferTime: 0.14, // apex = v^2/2g ~ 1.53 m
+      fenceHeight: 1.0, benchHeight: 0.85, lowPropHeight: 0.5 }, // collider tops (m): feet above the top pass over
+    // touch auto-sprint: joystick pushed past radiusFrac of its radius, or a direction held holdTime seconds
+    autoSprint: { radiusFrac: 0.85, holdTime: 1.2, rampTime: 0.55, keyboardHold: false },
   },
 
   camera: {
@@ -139,6 +145,8 @@ export const CONFIG = {
   // obstacle: fog density, snow amount and wind ramp up smoothly (rampIn s), hold, then clear (rampOut s).
   // fog = FogExp2 density · snow = fraction of the snow particle pool drawn (1 = all) · wind = 0..1 drift
   // fall = flake fall-speed multiplier · post = bloom/DOF so clear nights stay crisp and readable.
+  // fake-interior parallax rooms behind the lit windows of the Tripo houses (src/interiors.js, rects in assets/windows.js)
+  interiors: { enabled: true, push: 0.05, inset: 0.94 }, // push = metres in front of the glass, inset = quad scale vs the detected rect
   weather: {
     presets: {
       clear:     { fog: 0.0042, snow: 0.3,  wind: 0.08, fall: 0.85, storms: false },
@@ -155,19 +163,30 @@ export const CONFIG = {
   },
 
   // ------------------------------------------------------------------ world
+  // navigation aids
+  nav: { arrow: true, distance: true, arrowRadius: 2.2, arrowScale: 1.05, arrowHideNear: 4.5, beacons: true, beaconHeight: 70, edgeIndicators: true, edgeMax: 6, edgeMargin: 44,
+         mapPath: true, mapChecks: true, housesLeft: true, housesLeftText: '{n} houses left', houseLeftOne: '1 house left' },
+  // shop-sign names (crisp code-drawn lettering over the baked AI sign boards); '' = plain board. Church/houses: no text.
+  signs: { bakery: 'Bakery', toyWorkshop: 'Toy Workshop', inn: 'Inn', font: "700 {px}px Georgia, 'Times New Roman', 'Palatino Linotype', serif" },
+  // house string lights (all quality tiers): roof edges + ridge + door/window frames, one Points draw
+  stringLights: { enabled: true, spacing: 0.15, spacingLow: 0.22, ridge: true, doors: true, windows: true, size: 0.34, intensity: 2.4, minPx: 2.2 },
   world: {
     seed: 1225,
-    radius: 185, // playable radius
+    radius: 150, // playable radius (village ~ r 112, then the forest edge)
+    // street layout: closed ring streets + radial mains (degrees) + cross streets; houses face the street
+    layout: { rings: [56, 92], mains: [20, 110, 215, 300], cross: [65, 160, 258, 345], lakeLane: true,
+              setback: [2.4, 3.4], gap: [0.8, 2.0], wideGapChance: 0.12, pathWidth: 1.6 },
+    forestStart: 116, // forest edge ring around the village
     roadWidth: 7,
     squareRadius: 24,
-    forestTrees: 900,
+    forestTrees: 1150,
     lampSpacing: 22,
-    spawnRadius: 52, // Santa starts this far out on the main street, facing the square
+    spawnRadius: 40, // Santa starts this far out on the main street, facing the square
     lampSpacingDense: 13, // street lamps inside the dense village core
-    denseRadius: 105, // houses line the streets shoulder-to-shoulder inside this radius
-    stringLightRadius: 125, // eave string lights on houses inside this radius
-    lakeCenter: [-95, 75],
-    lakeRadii: [34, 24],
+    denseRadius: 130, // houses line the streets shoulder-to-shoulder inside this radius
+    stringLightRadius: 1000, // eave string lights on houses inside this radius
+    lakeCenter: [-112, 70],
+    lakeRadii: [20, 14],
   },
 
   // ---------------------------------------------------------------- quality
@@ -181,8 +200,12 @@ export const CONFIG = {
               shafts: false, smoke: false, footprints: true, sparkle: false, snowLayers: 1, snowCount: 1200, forestScale: 0.55, lights: 4,  antialias: false },
     medium: { pixelRatio: 1.25, shadows: true,  shadowMapSize: 2048, bloom: true, bloomScale: 0.75, msaa: 2, ao: false, dof: false, grade: true, env: true,
               shafts: true,  smoke: true,  footprints: true, sparkle: true,  snowLayers: 2, snowCount: 2500, forestScale: 0.8,  lights: 8,  antialias: false },
-    high:   { pixelRatio: 2.0,  shadows: true,  shadowMapSize: 4096, bloom: true, bloomScale: 1.0, msaa: 4, ao: true,  dof: true,  grade: true, env: true,
-              shafts: true,  smoke: true,  footprints: true, sparkle: true,  snowLayers: 3, snowCount: 5000, forestScale: 1.0,  lights: 12, antialias: true },
+    // high = smooth 60 fps on an Apple M-series laptop: 1.5x render scale cap, 2K tight shadows, GTAO + DOF only in cutscenes
+    high:   { pixelRatio: 1.5,  shadows: true,  shadowMapSize: 2048, bloom: true, bloomScale: 0.75, msaa: 4, ao: 'cinematic', dof: 'cinematic', grade: true, env: true,
+              shafts: true,  smoke: true,  footprints: true, sparkle: true,  snowLayers: 3, snowCount: 3500, forestScale: 1.0,  lights: 8,  antialias: false },
+    // ultra = beauty / screenshot preset (the old 'high'): 2x scale, 4K shadows, GTAO + DOF always on
+    ultra:  { pixelRatio: 2.0,  shadows: true,  shadowMapSize: 4096, bloom: true, bloomScale: 1.0, msaa: 4, ao: true,  dof: true,  grade: true, env: true,
+              shafts: true,  smoke: true,  footprints: true, sparkle: true,  snowLayers: 3, snowCount: 5000, forestScale: 1.0,  lights: 12, antialias: false },
   },
   // Look: tone mapping, image-based light (Poly Haven CC0 night HDRI), grade
   look: {
@@ -195,7 +218,20 @@ export const CONFIG = {
     lampShaftIntensity: 0.12,
   },
   bloom: { strength: 0.7, radius: 0.5, threshold: 0.85 },
-  audio: true,
+  // ---------------------------------------------------------------- performance
+  performance: {
+    targetFps: 60,              // dynamic resolution + quality governor aim for this (auto quality only)
+    dynamicResolution: true,    // scale the render resolution with frame time (auto quality only)
+    minScale: 0.6, maxScale: 1.0, // fraction of the preset pixel ratio
+    maxPixels: { desktop: 4.2e6, mobile: 2.0e6 }, // hard cap on drawing-buffer pixels (also clamped to GPU limits)
+    mobile: { maxPixelRatio: 1.5, ao: false, dof: false, msaa: 2, shadowMapSize: 1024 }, // always applied on touch devices
+    shadowFrustum: 28,          // half-size (m) of the moon shadow box around the player
+    pineNearRange: 58,          // m: full needle-card pines inside, impostor cards beyond
+    decoRange: 70,              // m: decorations / bulbs drawn within this range of the camera
+    lampRange: 110,
+  },
+  // audio: self-synthesised (src/audio.js, credits in assets/audio/CREDITS.md). Player volume/mute persist in localStorage.
+  audio: { enabled: true, master: 0.9, music: 0.55, sfx: 0.8, footsteps: 0.5, boostLayer: 1, windBase: 0.02, windStorm: 0.22 },
 };
 
 // Apply URL overrides (?difficulty=easy|normal|hard, ?quality=low|medium|high, ?level=1..N)
@@ -211,9 +247,13 @@ export function resolveQuality(cfg = CONFIG) {
   let q = cfg.quality;
   if (q === 'auto') {
     const touch = matchMedia('(pointer: coarse)').matches;
-    q = touch || Math.min(innerWidth, innerHeight) < 600 ? 'low' : 'high';
+    q = touch ? (Math.min(screen.width, screen.height) < 360 ? 'low' : 'medium') : 'high';
   }
   const Q = { name: q, auto: cfg.quality === 'auto', ...cfg.qualityPresets[q] };
+  // touch devices (iPhone / iPad / Android): never GTAO / DOF, capped scale + MSAA + shadow size
+  const touch = matchMedia('(pointer: coarse)').matches || 'ontouchstart' in window;
+  Q.mobile = touch;
+  if (touch) { const M = cfg.performance.mobile; Q.pixelRatio = Math.min(Q.pixelRatio, M.maxPixelRatio); Q.ao = M.ao && Q.ao; Q.dof = M.dof && Q.dof; Q.msaa = Math.min(Q.msaa, M.msaa); Q.shadowMapSize = Math.min(Q.shadowMapSize, M.shadowMapSize); }
   // dev/QA: ?fx=ao:0,msaa:0,shadowMapSize:2048 overrides individual preset fields
   const fx = new URLSearchParams(location.search).get('fx');
   if (fx) for (const kv of fx.split(',')) { const [k, v] = kv.split(':'); if (k in Q) Q[k] = v === 'true' ? true : v === 'false' ? false : isNaN(+v) ? v : +v; }

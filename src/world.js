@@ -9,7 +9,11 @@ import { pineGeometry, lampGeometries, christmasTree, snowman, bench, giftPile, 
 import { MANIFEST, instantiate, bakedMeshes, addTextureGlow } from './assets.js';
 import { makeLogoMesh } from './logo.js';
 import { findChimney } from './fx.js';
-import { smoothIco, snowBlend, snowSparkle, snowmanVariant, houseDecor, fenceGarland, fbm, hash2 } from './xmasdeco.js';
+import { WINDOWS, DOORS, SIGNS } from '../assets/windows.js';
+import { SurfaceBVH, SurfaceField, rayGap } from './attach.js';
+import { buildShopSign } from './signs.js';
+const attachCache = new Map(), lightCache = new Map();
+import { smoothIco, snowBlend, snowSparkle, snowmanVariant, houseDecor, fenceGarland, fbm, hash2, attachedWreath, attachedGarland } from './xmasdeco.js';
 import { buildTerrain, conformDecals, makeTracks } from './terrain.js';
 const chimneyCache = new Map();
 const eaveCache = new Map();
@@ -19,7 +23,8 @@ const BULB_PALETTES = { warm: [0xffc86a, 0xffd88c, 0xffb050, 0xffe2a8], multi: [
 /** Front roof-line silhouette of a building model in holder space -> bulb positions every ~0.3 m.
  *  Takes the highest vertex per x-bin within a thin slab at the front of the model (= the gable edge
  *  for front-gabled houses, the eave for side-gabled ones), clamps chimney spikes, adds a little droop. */
-export function eaveProfile(obj, holder, side = 0) {
+export function eaveProfile(obj, holder, side = 0, opt = {}) {
+  const SP = opt.spacing ?? 0.3;
   holder.updateMatrixWorld(true);
   const inv = new THREE.Matrix4().makeRotationY(-side).multiply(new THREE.Matrix4().copy(holder.matrixWorld).invert()), m = new THREE.Matrix4(), v = new THREE.Vector3();
   const box = new THREE.Box3(); // tight box in holder space (a world AABB mapped back would be inflated by the rotation)
@@ -30,7 +35,7 @@ export function eaveProfile(obj, holder, side = 0) {
   });
   const W0 = box.min.x, Wd = box.max.x - box.min.x, H = box.max.y - box.min.y, zF = box.max.z, depth = box.max.z - box.min.z;
   const NB = 28, top = new Array(NB).fill(-1e9), topZ = new Array(NB).fill(zF);
-  const slab = Math.min(1.6, depth * 0.22);
+  const slab = opt.ridge ? depth : Math.min(1.6, depth * 0.22);
   obj.traverse(o => {
     if (!o.isMesh) return;
     m.multiplyMatrices(inv, o.matrixWorld);
@@ -51,14 +56,14 @@ export function eaveProfile(obj, holder, side = 0) {
     win.sort((p, q) => p - q); ys.push(win[Math.floor(win.length / 2)]);
     const wz = []; for (let k = -2; k <= 2; k++) { const j = Math.min(e, Math.max(a, i + k)); wz.push(topZ[j]); } wz.sort((p, q) => p - q); zs.push(wz[2] ?? topZ[i]);
   }
-  const pts = ys.map((y, i) => new THREE.Vector3(W0 + (a + i + 0.5) / NB * Wd, y - 0.12, zs[i] + 0.1));
+  const pts = ys.map((y, i) => opt.raw ? new THREE.Vector3(W0 + (a + i + 0.5) / NB * Wd, y, zs[i]) : new THREE.Vector3(W0 + (a + i + 0.5) / NB * Wd, y - (opt.ridge ? -0.04 : -0.03), opt.ridge ? zs[i] : zs[i] + 0.2));
   // resample along the polyline every 0.3 m with a slight catenary droop between 1.5 m anchors
   const out = []; let acc = 0;
   for (let i = 1; i < pts.length; i++) {
     const p0 = pts[i - 1], p1 = pts[i], L = p0.distanceTo(p1);
-    for (let t = 0; t < L; t += 0.3) {
+    for (let t = 0; t < L; t += SP) {
       const q = p0.clone().lerp(p1, t / L); const ph = ((acc + t) % 1.5) / 1.5;
-      q.y -= Math.sin(ph * Math.PI) * 0.12; out.push(q);
+      if (!opt.raw) q.y -= Math.sin(ph * Math.PI) * (opt.ridge ? 0.05 : 0.12); out.push(q);
     }
     acc += L;
   }
@@ -108,6 +113,27 @@ export function snowyCobble(mat, mode, size) {
 
 const W = CONFIG.world;
 
+
+// merge a static group's single-material meshes by material (+shadow flags) -> a few draw calls per sign
+function batchByMaterial(group) {
+  group.updateMatrixWorld(true); const inv = new THREE.Matrix4().copy(group.matrixWorld).invert(), M = new THREE.Matrix4(), sets = new Map(), kill = [];
+  group.traverse(o => {
+    if (!o.isMesh || o.isInstancedMesh || o.isSkinnedMesh || Array.isArray(o.material) || o.userData.noBatch) return;
+    M.multiplyMatrices(inv, o.matrixWorld); if (M.determinant() < 0) return;
+    let g = o.geometry.index ? o.geometry.toNonIndexed() : o.geometry.clone();
+    for (const k of Object.keys(g.attributes)) if (!['position', 'normal', 'uv'].includes(k)) g.deleteAttribute(k);
+    if (!g.attributes.normal) g.computeVertexNormals();
+    if (!g.attributes.uv) g.setAttribute('uv', new THREE.BufferAttribute(new Float32Array(g.attributes.position.count * 2), 2));
+    g.morphAttributes = {}; g.clearGroups(); g.applyMatrix4(M);
+    const key = o.material.uuid + (o.castShadow ? 'c' : '') + (o.receiveShadow ? 'r' : '');
+    if (!sets.has(key)) sets.set(key, { mat: o.material, cs: o.castShadow, rs: o.receiveShadow, geos: [] });
+    sets.get(key).geos.push(g); kill.push(o);
+  });
+  for (const o of kill) o.parent.remove(o);
+  for (const { mat, cs, rs, geos } of sets.values()) { const m = new THREE.Mesh(mergeGeometries(geos), mat); m.castShadow = cs; m.receiveShadow = rs; group.add(m); }
+  return sets.size;
+}
+
 export class World {
   constructor(scene, quality) {
     this.scene = scene; this.q = quality;
@@ -120,7 +146,7 @@ export class World {
     this.lightCandidates = [];
     this.animated = []; this.walkers = [];
     this.staticMeshes = [];
-    this.bulbs = []; this.bulbCols = [];
+    this.bulbs = []; this.bulbCols = []; this.bulbAux = [];
     this.deco = []; this.snowmen = [];
     this.build();
   }
@@ -133,6 +159,8 @@ export class World {
     this.makeSquare();
     this.makeLake();
     this.placeBuildings();
+    this.makePaths();
+    this.makeSnowBanks();
     this.makeLamps();
     this.makeStreetDressing();
     this.makeForest();
@@ -193,37 +221,53 @@ export class World {
     this.root.add(this.ground);
   }
 
+  // Village street network (all from config): two closed ring streets, radial mains from the square to the
+  // outer ring, cross streets linking the rings (every street ends on another street -> no dead ends) and one
+  // lane out to the frozen lake. Returned as [{ctrl, closed}] so collision, terrain, minimap and placement share it.
   roadDef() {
-    const deg = Math.PI / 180;
+    const deg = Math.PI / 180, L = W.layout || {};
+    const rings = L.rings || [56, 92];
+    const ringR = (ri, a) => rings[ri] * (1 + 0.035 * Math.sin(3 * a * deg + ri * 1.7) + 0.02 * Math.sin(5 * a * deg + 0.6 + ri));
     const P = (r, a) => new THREE.Vector3(Math.cos(a * deg) * r, 0, Math.sin(a * deg) * r);
-    const R = W.radius - 12;
-    const mains = [[20, 26, 18, 10, 14], [110, 104, 114, 122, 116], [215, 222, 212, 205, 210], [300, 294, 304, 312, 306]];
-    const rs = [W.squareRadius - 4, 60, 100, 140, R];
-    const roads = mains.map(as => as.map((a, i) => P(rs[i], a)));
-    roads.push([P(100, 18), P(125, 45), P(150, 60), P(R - 4, 70)]);
-    roads.push([P(92, 213), P(120, 190), P(150, 176), P(R - 4, 168)]);
-    roads.push([P(112, 304), P(135, 325), P(158, 340), P(R - 4, 348)]);
-    return roads;
+    const defs = [];
+    for (let ri = 0; ri < rings.length; ri++) { const n = 18 + ri * 6, ctrl = []; for (let i = 0; i < n; i++) { const a = i / n * 360; ctrl.push(P(ringR(ri, a), a)); } defs.push({ ctrl, closed: true, ring: ri }); }
+    // radial mains: square edge -> inner ring -> outer ring (gentle bends between the rings)
+    for (const a of L.mains || [20, 110, 215, 300]) {
+      const ctrl = [P(W.squareRadius - 4, a), P((W.squareRadius + rings[0]) / 2, a + 3), P(ringR(0, a + 2), a + 2)];
+      for (let ri = 1; ri < rings.length; ri++) { ctrl.push(P((rings[ri - 1] + rings[ri]) / 2, a - 2 + ri * 3), P(ringR(ri, a + ri * 2), a + ri * 2)); }
+      defs.unshift({ ctrl, closed: false, main: true });
+    }
+    // cross streets between consecutive rings
+    for (const a of L.cross || [65, 160, 258, 345]) for (let ri = 1; ri < rings.length; ri++)
+      defs.push({ ctrl: [P(ringR(ri - 1, a), a), P((rings[ri - 1] + rings[ri]) / 2, a + 3), P(ringR(ri, a + 5), a + 5)], closed: false });
+    // lane from the outer ring to the lake shore
+    if (L.lakeLane !== false) { const [cx, cz] = W.lakeCenter, a = Math.atan2(cz, cx) / deg, d = Math.hypot(cx, cz) - Math.min(...W.lakeRadii) - 2;
+      defs.push({ ctrl: [P(ringR(rings.length - 1, a), a), P((rings[rings.length - 1] + d) / 2, a + 2), P(d, a)], closed: false, lane: true }); }
+    return defs;
   }
 
   makeRoads() {
     const rw = W.roadWidth, EXT = 0.9; // ribbon extends under the snow banks; the shader blends it into snow
     const geos = [];
-    for (const ctrl of this.roadDef()) {
-      const curve = new THREE.CatmullRomCurve3(ctrl, false, 'centripetal');
+    // each ribbon gets its own height layer so overlapping junction ribbons never share a depth (no z-fight flicker)
+    let ri = 0; const defs = this.roadDef(); this.roadTopY = 0.035 + (defs.length - 1) * 0.01;
+    for (const def of defs) {
+      const ctrl = def.ctrl || def, closed = !!def.closed;
+      const ry = 0.035 + (ri++) * 0.01;
+      const curve = new THREE.CatmullRomCurve3(ctrl, closed, 'centripetal');
       const len = curve.getLength(); const n = Math.ceil(len / 1.5);
       const pts = [];
       for (let i = 0; i <= n; i++) {
         const t = i / n; const p = curve.getPointAt(t); const tg = curve.getTangentAt(t);
         pts.push({ x: p.x, z: p.z, tx: tg.x, tz: tg.z, s: t * len });
       }
-      this.roads.push({ curve, pts, length: len });
+      this.roads.push({ curve, pts, length: len, closed, kind: def.main ? 'main' : def.ring != null ? 'ring' : def.lane ? 'lane' : 'cross' });
       // ribbon
       const pos = [], uv = [], idx = [];
       const hw = rw / 2 + EXT;
       pts.forEach((p, i) => {
         const nx = -p.tz, nz = p.tx;
-        pos.push(p.x + nx * hw, 0.03, p.z + nz * hw, p.x - nx * hw, 0.03, p.z - nz * hw);
+        pos.push(p.x + nx * hw, ry, p.z + nz * hw, p.x - nx * hw, ry, p.z - nz * hw);
         uv.push(-EXT / 4, p.s / 4, (rw + EXT) / 4, p.s / 4);
         if (i) { const a = (i - 1) * 2; idx.push(a, a + 2, a + 1, a + 1, a + 2, a + 3); }
       });
@@ -236,12 +280,11 @@ export class World {
     }
     const roadMat = this.M.cobble.clone();
     for (const k of ['map', 'normalMap', 'roughnessMap']) { roadMat[k] = cloneTex(roadMat[k]); }
-    roadMat.polygonOffset = true; roadMat.polygonOffsetFactor = -1;
+    roadMat.polygonOffset = true; roadMat.polygonOffsetFactor = -1; roadMat.polygonOffsetUnits = -2;
     roadMat.color.set(0xa49a92); roadMat.roughness = 1; roadMat.normalScale.set(1.4, 1.4);
     snowyCobble(roadMat, 0, rw);
-    const rm = new THREE.Mesh(mergeGeometries(geos), roadMat); rm.receiveShadow = true; this.root.add(rm);
+    const rm = new THREE.Mesh(mergeGeometries(geos), roadMat); rm.receiveShadow = true; this.root.add(rm); this.roadMesh = rm;
     this.roadMat = roadMat;
-    this.makeSnowBanks();
   }
 
   // Lumpy, noisy snow heaps along both road edges (replaces the old flat white curb strips).
@@ -273,7 +316,8 @@ export class World {
           // fade under junctions / the square
           const cx = p.x + nx * (rw / 2 + 0.9), cz = p.z + nz * (rw / 2 + 0.9);
           const dOther = nearOther(cx, cz, road), dSq = Math.hypot(cx, cz) - W.squareRadius;
-          const keep = Math.min(THREE.MathUtils.smoothstep(dOther, rw / 2 + 0.6, rw / 2 + 3.5), THREE.MathUtils.smoothstep(dSq, 0.5, 4));
+          let dPath = 1e9; for (const q of this.paths || []) { const d = (q.x1 - cx) ** 2 + (q.z1 - cz) ** 2; if (d < dPath) dPath = d; }
+          const keep = Math.min(THREE.MathUtils.smoothstep(dOther, rw / 2 + 0.6, rw / 2 + 3.5), THREE.MathUtils.smoothstep(dSq, 0.5, 4), THREE.MathUtils.smoothstep(Math.sqrt(dPath), 1.1, 2.4));
           H *= keep;
           const inner = rw / 2 - 0.25 - 0.55 * (w2 * 0.5 + 0.5);
           const outer = rw / 2 + 1.5 + 0.9 * (w1 * 0.5 + 0.5);
@@ -318,9 +362,9 @@ export class World {
   }
 
   makeSquare() {
-    const sqMat = this.roadMat.clone(); snowyCobble(sqMat, 1, W.squareRadius);
+    const sqMat = this.roadMat.clone(); snowyCobble(sqMat, 1, W.squareRadius); sqMat.polygonOffsetFactor = -2; sqMat.polygonOffsetUnits = -4;
     const sq = new THREE.Mesh(new THREE.CircleGeometry(W.squareRadius, 64).rotateX(-Math.PI / 2), sqMat);
-    sq.position.y = 0.035; sq.receiveShadow = true; this.root.add(sq);
+    sq.position.y = (this.roadTopY ?? 0.035) + 0.02; sq.receiveShadow = true; this.root.add(sq); this.squareMesh = sq;
     // scale uv
     const uv = sq.geometry.attributes.uv; for (let i = 0; i < uv.count; i++) uv.setXY(i, uv.getX(i) * W.squareRadius / 2, uv.getY(i) * W.squareRadius / 2);
     const ring = new THREE.Mesh(new THREE.TorusGeometry(W.squareRadius, 0.35, 6, 80), this.M.stone); ring.rotation.x = Math.PI / 2; ring.position.y = 0.05; this.root.add(ring);
@@ -338,7 +382,7 @@ export class World {
     for (let i = 0; i < 6; i++) {
       const a = i / 6 * Math.PI * 2 + 0.52; const b = glbOr(MANIFEST.props.bench, bench); const r = W.squareRadius - 4;
       b.position.set(Math.cos(a) * r, 0, Math.sin(a) * r); b.rotation.y = -a - Math.PI / 2; this.root.add(b);
-      this.addBox(b.position.x, b.position.z, 1.2, 0.4, b.rotation.y, 1);
+      this.addBox(b.position.x, b.position.z, 1.2, 0.4, b.rotation.y, CONFIG.player.jump?.benchHeight ?? 1);
     }
     const sl = MANIFEST.props.sleigh; const sg = instantiate(sl); const s = sg ? sg.object : sleigh();
     s.position.set(11, 0, -8); s.rotation.y = 0.9; this.root.add(s); this.addBox(11, -8, 1.0, 1.8, 0.9, 2);
@@ -446,42 +490,86 @@ export class World {
   }
 
   placeBuildings() {
+    const L = W.layout || {};
     // around the square: hand-picked landmark types facing the tree
     const ringTypes = ['church', 'bakery', 'validatorHouse', 'inn', 'townhouse', 'toyWorkshop', 'townhouse', 'gingerbread', 'stoneCottage'];
     let ti = 0;
-    for (let a = 0; a < Math.PI * 2 && ti < ringTypes.length; a += 0.08) {
+    for (let a = 0; a < Math.PI * 2 && ti < ringTypes.length; a += 0.06) {
       const type = ringTypes[ti]; const fp = MANIFEST.buildings[type].footprint;
-      const r = W.squareRadius + 3.5 + fp[1] / 2;
+      const r = W.squareRadius + 3 + fp[1] / 2;
       const x = Math.cos(a) * r, z = Math.sin(a) * r; const rot = Math.atan2(-x, -z);
-      if (this.canPlace(x, z, rot, fp[0], fp[1])) { this.addBuilding(type, x, z, rot); ti++; a += 0.25; }
+      if (this.canPlace(x, z, rot, fp[0], fp[1], 0.6, 1.2)) { this.addBuilding(type, x, z, rot, null); ti++; a += 0.12; }
     }
-    // along roads, both sides. Inside the village core (r < W.denseRadius) houses line the street
-    // shoulder to shoulder, close to the cobbles (concept art); further out they thin into hamlets.
+    // every street, both sides: houses packed shoulder to shoulder, front door facing the street at a 2-4 m
+    // setback (models' front = +z, see MANIFEST front), with an occasional wider gap that the dressing fills
+    const [sb0, sb1] = L.setback || [2.4, 3.4], [g0, g1] = L.gap || [0.8, 2.0];
     for (const road of this.roads) {
+      if (road.kind === 'lane') continue;
       for (const side of [1, -1]) {
-        for (let s = 6; s < road.length - 4;) {
-          const i = Math.min(road.pts.length - 1, Math.round(s / 1.5)); const p = road.pts[i];
-          const dense = Math.hypot(p.x, p.z) < W.denseRadius;
-          if (!dense && this.R() < 0.18) { s += this.R.range(9, 14); continue; }
+        let cur = road.closed ? 0 : 5;
+        const end = road.length - (road.closed ? 0 : 5);
+        let tries = 0;
+        while (cur < end && tries++ < 400) {
           const type = this.pickType(); const fp = MANIFEST.buildings[type].footprint;
+          const sMid = cur + fp[0] / 2; if (sMid + fp[0] / 2 > end) break;
+          const i = Math.min(road.pts.length - 1, Math.round(sMid / road.length * (road.pts.length - 1))); const p = road.pts[i];
           const nx = -p.tz * side, nz = p.tx * side;
-          const off = W.roadWidth / 2 + (dense ? 2.1 + this.R.range(0, 0.9) : 3 + this.R.range(0, 2)) + fp[1] / 2;
+          const off = W.roadWidth / 2 + this.R.range(sb0, sb1) + fp[1] / 2;
           const x = p.x + nx * off, z = p.z + nz * off;
-          const rot = Math.atan2(-nx, -nz) + (dense ? this.R.range(-0.07, 0.07) : 0);
-          if (this.canPlace(x, z, rot, fp[0], fp[1], dense ? 0.6 : 1.5, dense ? 1.0 : 1.6)) { this.addBuilding(type, x, z, rot); s += dense ? fp[0] / 2 + this.R.range(3.2, 5.5) : this.R.range(9, 14); }
-          else s += dense ? 2 : this.R.range(9, 14);
+          const rot = Math.atan2(-nx, -nz) + this.R.range(-0.04, 0.04);
+          if (this.canPlace(x, z, rot, fp[0], fp[1], 0.45, 0.9)) {
+            this.addBuilding(type, x, z, rot, { road, i, side });
+            cur += fp[0] + (this.R() < (L.wideGapChance ?? 0.12) ? this.R.range(4, 6) : this.R.range(g0, g1));
+          } else cur += 1.5;
         }
       }
     }
-    // ensure enough validator-style houses exist
     const nVal = this.buildings.filter(b => b.type === 'validatorHouse').length;
     console.info(`[world] ${this.buildings.length} buildings (${nVal} validator houses)`);
   }
 
-  addBuilding(type, x, z, rot) {
+  // short cobble/snow path from every front door to the street edge (flattened into the terrain + cut through the banks)
+  makePaths() {
+    const rw = W.roadWidth, pw = (W.layout || {}).pathWidth ?? 1.6, geos = [];
+    this.paths = [];
+    for (const b of this.buildings) {
+      if (!b.isGLB) continue;
+      // nearest street point in front of the door
+      let best = null, bd = 1e9;
+      for (const r of this.roads) for (const p of r.pts) { const d = (p.x - b.door.x) ** 2 + (p.z - b.door.z) ** 2; if (d < bd) { bd = d; best = p; } }
+      if (!best && Math.hypot(b.x, b.z) > W.squareRadius + 20) continue;
+      let tx, tz;
+      const dSq = Math.hypot(b.door.x, b.door.z) - W.squareRadius;
+      if (dSq < Math.sqrt(bd) - rw / 2) { const k = (W.squareRadius - 0.6) / Math.hypot(b.door.x, b.door.z); tx = b.door.x * k; tz = b.door.z * k; }
+      else { const d = Math.sqrt(bd), k = Math.max(0, d - rw / 2 + 0.5) / d; tx = b.door.x + (best.x - b.door.x) * k; tz = b.door.z + (best.z - b.door.z) * k; }
+      const x0 = b.door.x - b.front.x * 0.05, z0 = b.door.z - b.front.z * 0.05;
+      const len = Math.hypot(tx - x0, tz - z0); if (len < 0.5 || len > 9) continue;
+      this.paths.push({ x0, z0, x1: tx, z1: tz, w: pw, b });
+      b.path = this.paths[this.paths.length - 1];
+      const dx = (tx - x0) / len, dz = (tz - z0) / len, nx = -dz * pw / 2, nz = dx * pw / 2, y = 0.03;
+      const g = new THREE.BufferGeometry();
+      g.setAttribute('position', new THREE.Float32BufferAttribute([x0 + nx, y, z0 + nz, x0 - nx, y, z0 - nz, tx + nx, y, tz + nz, tx - nx, y, tz - nz], 3));
+      g.setAttribute('uv', new THREE.Float32BufferAttribute([0, 0, pw / 4, 0, 0, len / 4, pw / 4, len / 4], 2));
+      g.setAttribute('normal', new THREE.Float32BufferAttribute([0, 1, 0, 0, 1, 0, 0, 1, 0, 0, 1, 0], 3));
+      g.setIndex([0, 2, 1, 1, 2, 3]); geos.push(g);
+    }
+    if (!geos.length) return;
+    const m = this.roadMat.clone(); snowyCobble(m, 0, pw); m.polygonOffsetFactor = -1.5; m.polygonOffsetUnits = -3;
+    const mesh = new THREE.Mesh(mergeGeometries(geos), m); mesh.receiveShadow = true; this.root.add(mesh); this.pathMesh = mesh;
+  }
+  distToPath(x, z) {
+    let best = 1e9;
+    for (const q of this.paths || []) {
+      const dx = q.x1 - q.x0, dz = q.z1 - q.z0, l2 = dx * dx + dz * dz || 1, t = Math.max(0, Math.min(1, ((x - q.x0) * dx + (z - q.z0) * dz) / l2));
+      const d = Math.hypot(x - q.x0 - dx * t, z - q.z0 - dz * t); if (d < best) best = d;
+    }
+    return best;
+  }
+
+  addBuilding(type, x, z, rot, street = null) {
     const spec = MANIFEST.buildings[type];
     const glb = instantiate({ ...spec, fit: { footprint: spec.footprint } });
-    const holder = new THREE.Group(); holder.position.set(x, 0, z); holder.rotation.y = rot;
+    const holder = new THREE.Group(); holder.position.set(x, 0, z); holder.rotation.y = rot; holder.userData.type = type;
     const winMat = windowMaterial();
     let windowMesh = null, animated = [];
     let gSize = null, gBox = null;
@@ -510,7 +598,8 @@ export class World {
         const logo = makeLogoMesh(lw * s * 0.5, 0.024, 0x4fc3ff, 1.5); logo.position.z = 0.03; plate.add(logo);
         plate.userData.logo = logo; holder.add(plate);
       }
-      if (spec.sign) this.mountSign(holder, glb.object, gBox);
+      if (spec.sign) this.mountSign(holder, glb.object, gBox, type);
+      if (SIGNS[type] && CONFIG.signs?.[type] != null) this.mountShopSign(holder, type, SIGNS[type], CONFIG.signs[type], glb.object);
       if (spec.smoke !== false) {
         if (!chimneyCache.has(type)) chimneyCache.set(type, findChimney(glb.object));
         var chimneyLocal = chimneyCache.get(type);
@@ -535,20 +624,28 @@ export class World {
       holder, winMat, door, front: new THREE.Vector3(fx, 0, fz),
       trigger: door.clone().addScaledVector(new THREE.Vector3(fx, 0, fz), 1.6),
       light: { x: door.x + fx * 1.2, y: 3.2, z: door.z + fz * 1.2, color: WINDOW_WARM.clone(), intensity: 16, distance: 15 },
-      isGLB: !!glb,
+      isGLB: !!glb, street,
       chimney: chimneyLocal ? chimneyLocal.clone().applyMatrix4(holder.matrixWorld) : null,
     };
     this.lightCandidates.push(b.light);
-    // string lights along the front roof line (gable/eave silhouette measured from the model itself)
-    if (glb && !NO_STRING_LIGHTS.has(type) && Math.hypot(x, z) < W.stringLightRadius && this.q.name !== 'low') {
-      // every side of the roof: front + back eaves/gables and both side gables
+    // string lights: every roof edge (front/back eaves or gables, both side gables, the ridge) measured from the model,
+    // plus frames around the front door and the front windows. ~15 cm bulb spacing; all quality tiers (emissive points).
+    const SL = CONFIG.stringLights || {};
+    if (glb && SL.enabled !== false && !NO_STRING_LIGHTS.has(type) && Math.hypot(x, z) < W.stringLightRadius) {
       const h = hash2(x * 0.37, z * 0.71);
-      const pal = type === 'validatorHouse' ? BULB_PALETTES.blue : h < 0.48 ? BULB_PALETTES.warm : h < 0.88 ? BULB_PALETTES.multi : BULB_PALETTES.candy;
-      for (const sd of [0, Math.PI / 2, Math.PI, -Math.PI / 2]) {
-        const k = type + ':' + sd.toFixed(2);
-        if (!eaveCache.has(k)) eaveCache.set(k, eaveProfile(glb.object, holder, sd));
-        const prof = eaveCache.get(k);
-        if (prof) prof.forEach((v, i) => { this.bulbs.push(v.clone().applyMatrix4(holder.matrixWorld)); this.bulbCols.push(pal[i % pal.length]); });
+      const pal = type === 'validatorHouse' ? BULB_PALETTES.blue : h < 0.42 ? BULB_PALETTES.warm : h < 0.84 ? BULB_PALETTES.multi : BULB_PALETTES.candy;
+      const mode = h < 0.25 ? 1 : (h * 7.31) % 1 < 0.35 ? 2 : 0; // 0 twinkle, 1 chase, 2 slow fade
+      const sp = this.q.name === 'low' ? (SL.spacingLow ?? 0.22) : (SL.spacing ?? 0.15);
+      const k0 = type + ':' + sp;
+      if (!lightCache.has(k0)) lightCache.set(k0, this.snappedLights(type, glb.object, holder, sp, SL));
+      let n = 0;
+      for (const str of lightCache.get(k0)) {
+        let s = 0;
+        str.forEach((v, i) => {
+          if (i) s += Math.min(0.5, v.distanceTo(str[i - 1]));
+          this.bulbs.push(v.clone().applyMatrix4(holder.matrixWorld)); this.bulbCols.push(pal[n++ % pal.length]);
+          this.bulbAux.push(s, mode, h);
+        });
       }
     }
     for (const a of animated) this.animated.push(a);
@@ -625,12 +722,12 @@ export class World {
         const nx = -p.tz * side, nz = p.tx * side;
         // snowy picket fence just off the curb bank
         const fo = rw / 2 + 1.75, fx = p.x + nx * fo, fz = p.z + nz * fo;
-        if (run && d0 > W.squareRadius + 3 && !this.buildingAt(fx, fz, 0.5) && !nearLamp(fx, fz, 1.1) && !this.inLake(fx, fz, 1) && this.distToRoad(fx, fz) > rw / 2 + 1.4)
+        if (run && d0 > W.squareRadius + 3 && this.distToPath(fx, fz) > 1.5 && !this.buildingAt(fx, fz, 0.5) && !nearLamp(fx, fz, 1.1) && !this.inLake(fx, fz, 1) && this.distToRoad(fx, fz) > rw / 2 + 1.4)
           fences.push([fx, fz, Math.atan2(p.tx, p.tz)]);
         // small snowy pines in the gaps between houses
         if (R() < 0.8) {
           const po = rw / 2 + R.range(2.5, 5.2), px = p.x + nx * po + p.tx * R.range(-1, 1), pz = p.z + nz * po + p.tz * R.range(-1, 1);
-          if (d0 > W.squareRadius + 3 && !this.buildingAt(px, pz, 1.0) && !nearLamp(px, pz, 1.8) && !this.inLake(px, pz, 1) && this.distToRoad(px, pz) > rw / 2 + 2.3
+          if (d0 > W.squareRadius + 3 && this.distToPath(px, pz) > 1.6 && !this.buildingAt(px, pz, 1.0) && !nearLamp(px, pz, 1.8) && !this.inLake(px, pz, 1) && this.distToRoad(px, pz) > rw / 2 + 2.3
             && !pines.some(q => (q[0] - px) ** 2 + (q[1] - pz) ** 2 < 3.2)) pines.push([px, pz, R.range(0.3, 0.62), R() * 6.28]);
         }
       }
@@ -660,8 +757,9 @@ export class World {
     const m4 = new THREE.Matrix4();
     fences.forEach(([x, z, r], i) => {
       m4.makeRotationY(r + Math.PI / 2); m4.setPosition(x, 0, z); fw.setMatrixAt(i, m4); fs.setMatrixAt(i, m4);
-      this.addBox(x, z, 1.2, 0.12, r + Math.PI / 2, 1.1);
+      this.addBox(x, z, 1.2, 0.12, r + Math.PI / 2, CONFIG.player.jump?.fenceHeight ?? 1.1);
     });
+    this.fenceList = fences;
     fw.count = fs.count = fences.length; fw.castShadow = true; fw.receiveShadow = fs.receiveShadow = true;
     for (const im of [fw, fs]) { im.computeBoundingSphere(); this.root.add(im); }
     // evergreen garlands with red bows and bulbs on ~55% of the fence segments
@@ -688,26 +786,50 @@ export class World {
       if (this.buildingAt(px, pz, 0.6) || this.distToRoad(px, pz) < rw / 2 + 1.6 || nearLamp(px, pz, 1.5) || pines.some(q => (q[0] - px) ** 2 + (q[1] - pz) ** 2 < 2.6)) continue;
       pines.push([px, pz, R.range(0.25, 0.5), R() * 6.28]);
     }
-    // small pines (Tripo pine, instanced)
-    const parts = this.pineParts();
-    const pinst = parts ? parts.map(({ geometry, material }) => new THREE.InstancedMesh(geometry, material, Math.max(1, pines.length)))
-      : [new THREE.InstancedMesh(pineGeometry(), new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.92 }), Math.max(1, pines.length))];
-    const q = new THREE.Quaternion(), sc = new THREE.Vector3(), pv = new THREE.Vector3(), up = new THREE.Vector3(0, 1, 0);
-    pines.forEach(([x, z, sz, r], i) => {
-      m4.compose(pv.set(x, 0, z), q.setFromAxisAngle(up, r), sc.set(sz, sz, sz)); for (const im of pinst) im.setMatrixAt(i, m4);
-      this.addCircle(x, z, 0.5 * sz + 0.2);
-    });
-    for (const im of pinst) { im.count = pines.length; im.castShadow = true; im.receiveShadow = !!parts; im.computeBoundingSphere(); this.root.add(im); }
+    // small pines -> needle-card PineSystem (built in main.js once the renderer exists)
+    this.pineTrees = this.pineTrees || [];
+    pines.forEach(([x, z, sz, r]) => { this.pineTrees.push({ x, z, s: sz, r, y: 0 }); this.addCircle(x, z, 0.5 * sz + 0.2); });
     this.streetPines = pines;
     // eave string lights: one instanced mesh of warm emissive bulbs (bloom makes them twinkle-glow)
     if (this.bulbs.length) {
-      const bulbs = new THREE.InstancedMesh(new THREE.OctahedronGeometry(0.065, 1), new THREE.MeshBasicMaterial({ color: 0xffffff }), this.bulbs.length);
-      const c = new THREE.Color();
-      this.bulbs.forEach((v, i) => {
-        m4.makeTranslation(v.x, v.y, v.z); bulbs.setMatrixAt(i, m4);
-        c.setHex(this.bulbCols[i] ?? 0xffc86a).multiplyScalar(2.6 + ((i * 7) % 5) * 0.25); bulbs.setColorAt(i, c);
+      // ONE Points draw for every bulb of the village: a hot core + soft halo sprite (reads as a glowing bulb even
+      // without bloom on 'low'), per-house twinkle / chase / fade animation, faded by the scene fog.
+      const n = this.bulbs.length, pos = new Float32Array(n * 3), col = new Float32Array(n * 3), aux = new Float32Array(n * 3);
+      const c = new THREE.Color(), SL = CONFIG.stringLights || {};
+      this.bulbs.forEach((v, i) => { pos.set([v.x, v.y, v.z], i * 3); c.setHex(this.bulbCols[i] ?? 0xffc86a); col.set([c.r, c.g, c.b], i * 3); });
+      aux.set(this.bulbAux.slice(0, n * 3));
+      const g = new THREE.BufferGeometry();
+      g.setAttribute('position', new THREE.BufferAttribute(pos, 3)); g.setAttribute('color', new THREE.BufferAttribute(col, 3)); g.setAttribute('aAux', new THREE.BufferAttribute(aux, 3));
+      const mat = new THREE.ShaderMaterial({
+        uniforms: { uTime: { value: 0 }, uPx: { value: 600 }, uSize: { value: SL.size ?? 0.34 }, uGain: { value: SL.intensity ?? 2.4 }, uFog: { value: 0 }, uMinPx: { value: SL.minPx ?? 2.2 } },
+        vertexShader: `attribute vec3 aAux; varying vec3 vCol; varying float vI; varying float vCore;
+          uniform float uTime, uPx, uSize, uGain, uFog, uMinPx;
+          float h1(float x){ return fract(sin(x * 91.17) * 43758.5453); }
+          void main(){
+            vec4 mv = modelViewMatrix * vec4(position, 1.0); gl_Position = projectionMatrix * mv;
+            float d = -mv.z, s = aAux.x, mode = aAux.y, seed = aAux.z * 97.0 + float(gl_VertexID) * 0.37;
+            float k;
+            if (mode < 0.5) k = 0.62 + 0.38 * smoothstep(0.15, 0.85, 0.5 + 0.5 * sin(uTime * (1.6 + 2.2 * h1(seed)) + 6.28 * h1(seed + 3.1)));
+            else if (mode < 1.5) k = 0.45 + 0.55 * smoothstep(0.55, 0.0, abs(fract(s * 0.9 - uTime * 0.7 + aAux.z) - 0.5) * 2.0);
+            else k = 0.55 + 0.45 * (0.5 + 0.5 * sin(uTime * 0.9 + aAux.z * 12.0 + s * 0.15));
+            float fog = exp(-uFog * uFog * d * d);
+            float px = uSize * uPx / max(d, 0.1);
+            vCore = clamp(px / 9.0, 0.18, 1.0);           // far: the sprite is mostly core
+            gl_PointSize = clamp(px, uMinPx, 72.0);
+            vCol = color; vI = k * uGain * fog * min(1.0, px / uMinPx);
+          }`,
+        fragmentShader: `varying vec3 vCol; varying float vI; varying float vCore;
+          void main(){
+            vec2 q = gl_PointCoord * 2.0 - 1.0; float r = length(q); if (r > 1.0) discard;
+            float core = 1.0 - smoothstep(0.10 / vCore * 0.5, 0.22 / vCore * 0.5 + 0.02, r);
+            float halo = pow(1.0 - r, 2.2) * 0.55;
+            vec3 c = vCol * (halo + core * 1.6) + vec3(1.0, 0.95, 0.85) * core * 0.9;
+            gl_FragColor = vec4(c * vI, 1.0);
+          }`,
+        transparent: true, depthWrite: false, blending: THREE.AdditiveBlending, vertexColors: true,
       });
-      bulbs.computeBoundingSphere(); this.root.add(bulbs); this.bulbMesh = bulbs;
+      const bulbs = new THREE.Points(g, mat); bulbs.frustumCulled = false; bulbs.name = 'stringLights'; bulbs.renderOrder = 3;
+      this.root.add(bulbs); this.bulbMesh = bulbs; this.bulbMat = mat;
     }
     this.makeYardLife(R);
     console.info(`[world] street dressing: ${fences.length} fence segments, ${pines.length} small pines, ${this.bulbs.length} string-light bulbs`);
@@ -739,16 +861,149 @@ export class World {
     }
     return this._pineParts;
   }
-  // Official Optimum mark as a mounted neon sign above the validator's door (replaces any baked texture logo).
-  mountSign(holder, obj, gBox) {
-    const ray = new THREE.Raycaster(); let wallZ = gBox.max.z;
-    const hits = [];
-    for (const x of [-0.6, 0, 0.6]) {
-      ray.set(new THREE.Vector3(x, 3.1, gBox.max.z + 4), new THREE.Vector3(0, 0, -1));
-      const h = ray.intersectObject(obj, true)[0]; if (h) hits.push(h.point.z);
+  // Crisp shop sign: a carved dark-wood board (covers the garbled baked lettering) with gold-leaf serif text, a warm
+  // glow on the letters and a snow cap. One canvas texture per sign type, shared by every copy of that building.
+  /** Diegetic hand-crafted shop sign (src/signs.js) bolted flush to the real facade via the depth field. */
+  mountShopSign(holder, type, rect, text, obj) {
+    const F = this.attachFields(type, obj, holder).front, rc = new THREE.Raycaster();
+    const rayUp = (x, y, z) => { // holder-space ray straight up -> underside height of the beam above, or null
+      holder.updateMatrixWorld(true); const o = new THREE.Vector3(x, y, z).applyMatrix4(holder.matrixWorld);
+      rc.set(o, new THREE.Vector3(0, 1, 0).transformDirection(holder.matrixWorld)); rc.far = 1.5;
+      const hh = rc.intersectObject(obj, true)[0]; return hh ? y + hh.distance : null;
+    };
+    const S = buildShopSign(type, text, rect, F, rayUp);
+    if (!S) { console.warn('[sign] no wall for', type); return; }
+    batchByMaterial(S.group); holder.add(S.group); holder.updateMatrixWorld(true);
+    const L = S.light.clone().applyMatrix4(holder.matrixWorld);
+    this.lightCandidates.push({ x: L.x, y: L.y, z: L.z, color: new THREE.Color(0xffb25a), intensity: 3.5, distance: 4.5, sign: true });
+    const A = ((this.attachAudit ||= {})[type] ||= { obj, holder, bulbs: [], dropped: 0 });
+    if (!A.signs) A.signs = S.audit;
+    (this.shopSigns ||= []).push(S.group);
+  }
+
+
+  /** Per-type depth fields (front facade z-buffer + top roof heightmap) of the real model, holder space. */
+  attachFields(type, obj, holder) {
+    if (!attachCache.has(type)) { const t0 = performance.now(); const S = new SurfaceBVH(obj, holder); attachCache.set(type, { S, front: new SurfaceField(S, 'front'), top: new SurfaceField(S, 'top') }); const ms = performance.now() - t0; (globalThis.__attachMs ||= {})[type] = +ms.toFixed(1); console.info(`[attach] ${type} surface BVH ${ms.toFixed(0)} ms`); }
+    return attachCache.get(type);
+  }
+  /** String lights for one building type, every bulb snapped onto the real mesh (holder space):
+   *  eaves -> on the roof's edge corner (fascia), ridge -> on the ridge top, door/window frames -> on the wall
+   *  around the opening. Bulbs with no surface within tolerance are removed. Records audit data per type. */
+  snappedLights(type, obj, holder, sp, SL) {
+    const F = this.attachFields(type, obj, holder), OFF = 0.012, strings = [], audit = [];
+    let dropped = 0;
+    for (const sd of [0, Math.PI / 2, Math.PI, -Math.PI / 2]) {
+      const raw = eaveProfile(obj, holder, sd, { spacing: sp, raw: true }); if (!raw) continue;
+      const o = new THREE.Vector3(Math.sin(sd), 0, Math.cos(sd)), str = [];
+      for (const p of raw) {
+        // march outward along the top heightmap to the last roof cell near this eave height = the edge corner
+        let edge = null;
+        for (let t = -0.35; t <= 0.45; t += 0.02) {
+          const x = p.x + o.x * t, z = p.z + o.z * t, hy = F.top.at(x, z);
+          if (hy != null && Math.abs(hy - p.y) < 0.4) edge = [x, hy, z];
+        }
+        if (!edge) { dropped++; continue; }
+        const q = new THREE.Vector3(edge[0] - o.x * 0.012, edge[1] - 0.01, edge[2] - o.z * 0.012); // clipped on the roof edge (gutter line)
+        str.push(q); audit.push({ p: q, dirs: [o, new THREE.Vector3(0, 1, 0), o.clone().add(new THREE.Vector3(0, 1, 0)).normalize()] });
+      }
+      if (str.length > 3) strings.push(str);
     }
-    if (hits.length) wallZ = Math.max(...hits);
-    const sign = new THREE.Group(); sign.position.set(0, 3.15, wallZ + 0.12);
+    if (SL.ridge !== false) for (const sd of [0, Math.PI / 2]) {
+      const r = eaveProfile(obj, holder, sd, { spacing: sp, ridge: true, raw: true });
+      const flat = r && r.filter((q, i) => i && Math.abs(q.y - r[i - 1].y) < sp * 0.35).length / r.length;
+      if (!r || flat <= 0.6) continue;
+      const str = [];
+      for (const p of r) { const hy = F.top.at(p.x, p.z); if (hy == null || Math.abs(hy - p.y) > 0.3) { dropped++; continue; } const q = new THREE.Vector3(p.x, hy + OFF, p.z); str.push(q); audit.push({ p: q, dirs: [new THREE.Vector3(0, 1, 0)] }); }
+      if (str.length > 3) strings.push(str);
+    }
+    const frame = (cx, cy, cz, w, hh, pad, arch) => { // rectangle (optional arch top) around a front door/window, every bulb on the wall
+      const out = [], hw = w / 2 + pad, top = cy + hh / 2 + pad, bot = Math.max(0.15, cy - hh / 2 - (arch ? 0 : pad * 0.4));
+      const push = (u, v) => {
+        const z = F.front.at(cx + u, v);
+        if (z == null || Math.abs(z - cz) > 0.5) { dropped++; return; }
+        const q = new THREE.Vector3(cx + u, v, z + OFF); out.push(q); audit.push({ p: q, dirs: [new THREE.Vector3(0, 0, 1)] });
+      };
+      const L = (a0, b0, a1, b1) => { const n = Math.max(1, Math.round(Math.hypot(a1 - a0, b1 - b0) / sp)); for (let i = 0; i < n; i++) push(a0 + (a1 - a0) * i / n, b0 + (b1 - b0) * i / n); };
+      L(-hw, bot, -hw, top);
+      const n = Math.max(2, Math.round(2 * hw / sp)); for (let i = 0; i <= n; i++) { const t = i / n; push(-hw + 2 * hw * t, top + (arch ? Math.sin(t * Math.PI) * 0.25 : 0)); }
+      L(hw, top, hw, bot); return out;
+    };
+    const dr = DOORS[type];
+    if (dr && SL.doors !== false) strings.push(frame(dr[0], dr[1], dr[2], dr[4], dr[5], 0.14, type === 'gingerbread'));
+    if (SL.windows !== false) for (const r of (WINDOWS[type] || [])) if (Math.abs(r[3]) < 0.1 && r[1] < 9) strings.push(frame(r[0], r[1], r[2], r[4], r[5], 0.1, false));
+    (this.attachAudit ||= {})[type] = { obj, holder, bulbs: audit, dropped };
+    return strings.filter(s => s.length);
+  }
+
+  /** Door wreath (centred on the real door panel, upper third) and door garland (following the facade around
+   *  the door frame) built per type in holder space from the depth field; null = no surface -> not placed. */
+  doorDecorGeo(kind, b) {
+    const key = kind + ':' + b.type; this._doorGeo ||= new Map();
+    if (this._doorGeo.has(key)) return this._doorGeo.get(key);
+    const dr = DOORS[b.type], obj = b.holder.children[0]; let geo = null;
+    const A = ((this.attachAudit ||= {})[b.type] ||= { obj, holder: b.holder, bulbs: [], dropped: 0 }); A.door ||= [];
+    if (dr && obj) {
+      const F = this.attachFields(b.type, obj, b.holder), Z = new THREE.Vector3(0, 0, 1);
+      if (kind === 'wreath') {
+        const cx = dr[0], cy = dr[1] + dr[5] * 0.2, zc = F.front.at(cx, cy); // the actual door panel (may sit in a recess)
+        if (zc != null && dr[2] - zc < 2.0 && zc - dr[2] < 0.45) {
+          const zb = zc + 0.006; geo = attachedWreath(cx, cy, zb);
+          A.door.push({ kind: 'wreath', p: new THREE.Vector3(cx, cy, zb), dirs: [Z] });
+        }
+      } else {
+        const top = dr[1] + dr[5] / 2 + (b.type === 'gingerbread' ? 0.5 : 0.32), hw = dr[4] / 2 + 0.32, path = []; let ok = true;
+        const N = 26;
+        for (let i = 0; i <= N; i++) {
+          const t = i / N; let x, y;
+          if (t < 0.15) { x = dr[0] - hw; y = top - 0.55 + t / 0.15 * 0.55; }
+          else if (t > 0.85) { x = dr[0] + hw; y = top - (t - 0.85) / 0.15 * 0.55; }
+          else { const u = (t - 0.15) / 0.7; x = dr[0] - hw + 2 * hw * u; y = top - Math.sin(u * Math.PI) * 0.16; }
+          const z = F.front.at(x, y);
+          if (z == null || Math.abs(z - dr[2]) > 0.6) { ok = false; break; }
+          path.push([x, y, z + 0.004]);
+        }
+        if (ok) {
+          // smooth z a little (tube must not kink) but never behind the surface
+          const zs = path.map((p, i) => Math.max(p[2], ...[-1, 1].map(k => path[Math.min(path.length - 1, Math.max(0, i + k))][2]) .map(v => Math.min(v, p[2] + 0.02))));
+          path.forEach((p, i) => p[2] = zs[i]);
+          geo = attachedGarland(path);
+          for (const p of path) A.door.push({ kind: 'garland', p: new THREE.Vector3(p[0], p[1], p[2]), dirs: [Z] });
+        }
+      }
+    }
+    this._doorGeo.set(key, geo); return geo;
+  }
+  /** Gap audit with true raycasts against each building type's mesh (holder space): every surface-attached decor
+   *  item (string-light bulbs, door wreaths/garland points, shop/validator signs) -> gap to the surface it hangs on.
+   *  Items over maxGap (3 cm) are reported; target = 0. */
+  decorGaps(maxGap = 0.03, sample = 1) {
+    const out = { maxGap, types: {}, over: 0, checked: 0, items: [] };
+    for (const [type, A] of Object.entries(this.attachAudit || {})) {
+      const T = out.types[type] = { bulbs: 0, door: 0, signs: 0, over: 0, worst: 0, droppedBulbs: A.dropped };
+      const chk = (e, cat, i) => {
+        if (i % sample) return; T[cat]++; out.checked++;
+        let g = Infinity; for (const p of (e.pts || [e.p])) for (const d of e.dirs) g = Math.min(g, rayGap(this.attachFields(type, A.obj, A.holder).S, p, d, 0.6));
+        T.worst = Math.max(T.worst, Math.min(g, 9));
+        if (g > maxGap) { T.over++; out.over++; if (out.items.length < 40) out.items.push({ type, cat, kind: e.kind, p: e.p.toArray().map(v => +v.toFixed(2)), gap: g === Infinity ? 'miss' : +g.toFixed(3) }); }
+      };
+      A.bulbs.forEach((e, i) => chk(e, 'bulbs', i)); (A.door || []).forEach((e, i) => chk(e, 'door', 0)); (A.signs || []).forEach((e, i) => chk(e, 'signs', 0));
+      T.worst = +T.worst.toFixed(3);
+    }
+    console.info(`[decor] attach audit: ${out.over} items with gap > ${maxGap * 100} cm (checked ${out.checked})`);
+    return out;
+  }
+
+  // Official Optimum mark as a mounted neon sign above the validator's door (replaces any baked texture logo).
+  mountSign(holder, obj, gBox, type = 'validatorHouse') {
+    // flush on the real facade: median frontmost surface under the plate (exact BVH rays), frame back on it
+    const F = this.attachFields(type, obj, holder).front, zs = [];
+    for (const u of [-1.1, -0.55, 0, 0.55, 1.1]) for (const v of [2.55, 3.15, 3.75]) { const q = F.at(u, v); if (q != null) zs.push(q); }
+    if (zs.length < 8) { console.warn('[sign] no wall for validator sign'); return; }
+    zs.sort((a, b) => a - b); const wallZ = zs[Math.floor(zs.length / 2)] + 0.003;
+    const sign = new THREE.Group(); sign.position.set(0, 3.15, wallZ + 0.055);
+    const A = ((this.attachAudit ||= {})[type] ||= { obj, holder, bulbs: [], dropped: 0 });
+    if (!A.signs) { const pts = [[-1.1, 2.55], [1.1, 2.55], [-1.1, 3.75], [1.1, 3.75], [0, 3.15]].map(([u, v]) => new THREE.Vector3(u, v, wallZ)); A.signs = [{ kind: 'validator-sign', p: pts[4], pts, dirs: [new THREE.Vector3(0, 0, 1)] }]; }
     const plateGeo = new THREE.BoxGeometry(2.5, 1.45, 0.08);
     const plate = new THREE.Mesh(plateGeo, new THREE.MeshStandardMaterial({ color: 0x0b1424, roughness: 0.35, metalness: 0.4 }));
     const frame = new THREE.Mesh(new THREE.BoxGeometry(2.62, 1.57, 0.05), new THREE.MeshStandardMaterial({ color: 0x1d2633, roughness: 0.5, metalness: 0.6 })); frame.position.z = -0.03;
@@ -757,7 +1012,7 @@ export class World {
     sign.add(frame, plate, cap, logo); sign.userData.logo = logo; holder.add(sign);
     this.validatorSign = sign;
   }
-  queueDeco(kind, x, z, rot, s = 1, lift = -0.03) { this.deco.push({ kind, x, z, rot, s, lift }); }
+  queueDeco(kind, x, z, rot, s = 1, lift = -0.03, b = null) { this.deco.push({ kind, x, z, rot, s, lift, b }); }
 
   // Lived-in street life: snow heaps against house walls, warm door pools, and a varied Christmas kit
   // in front of EVERY house (wreath, garland, candy canes, decorated mini trees, gift stacks, lantern posts,
@@ -786,8 +1041,8 @@ export class World {
       const special = NO_STRING_LIGHTS.has(b.type);
       // door dressing
       if (!special) {
-        const [wx, wz] = dw(0, 0.02); this.queueDeco('wreath', wx, wz, b.rot, 1, 0);
-        if (R() < 0.6) this.queueDeco('garland', wx, wz, b.rot, 1, 0);
+        const [wx, wz] = dw(0, 0.02); this.queueDeco('wreath', wx, wz, b.rot, 1, 0, b);
+        if (R() < 0.6) this.queueDeco('garland', wx, wz, b.rot, 1, 0, b);
       }
       const h = R();
       if (h < 0.42) { const [x, z] = dw(0, 0); if (free(x + f.x * 1.1, z + f.z * 1.1, 0.4)) { this.queueDeco('canes', x, z, b.rot); placed.push([x + f.x * 1.1, z + f.z * 1.1, 0.9]); } }
@@ -803,9 +1058,12 @@ export class World {
         if (!free(x, z, rad)) continue;
         placed.push([x, z, rad]); got++; nKits++;
         if (kind === 'snowman') { this.snowmen.push([x, z, b.rot + R.range(-0.6, 0.6), nSnowmen % 3, R.range(0.9, 1.12)]); nSnowmen++; this.addCircle(x, z, 0.75); }
-        else if (kind === 'tree') { this.queueDeco('tree' + (R() < 0.5 ? 0 : 1), x, z, R() * 6.28, R.range(0.9, 1.35)); this.addCircle(x, z, 0.55); }
-        else if (kind === 'gifts') this.queueDeco('gifts' + Math.floor(R() * 3), x, z, R() * 6.28);
-        else { this.queueDeco('sled', x, z, b.rot + R.range(-1, 1)); this.addCircle(x, z, 0.45); }
+        else if (kind === 'tree') { // decorated mini fir: needle-card foliage from the PineSystem + instanced bulbs/star kit
+          const ks = R.range(0.9, 1.35); this.queueDeco('tree' + (R() < 0.5 ? 0 : 1), x, z, R() * 6.28, ks); this.addCircle(x, z, 0.55);
+          (this.pineTrees = this.pineTrees || []).push({ x, z, s: 1.55 * ks / 9, r: R() * 6.28, y: 0, mini: true });
+        }
+        else if (kind === 'gifts') { this.queueDeco('gifts' + Math.floor(R() * 3), x, z, R() * 6.28); this.addCircle(x, z, 0.5, CONFIG.player.jump?.lowPropHeight ?? 0.5); } // low: jump over it
+        else { this.queueDeco('sled', x, z, b.rot + R.range(-1, 1)); this.addCircle(x, z, 0.45, CONFIG.player.jump?.lowPropHeight ?? 0.5); }
       }
     }
     const snowMat = this.M.snowGround.clone(); for (const k of ['map', 'normalMap', 'roughnessMap']) snowMat[k] = cloneTex(snowMat[k]); snowMat.color.set(0xd6e0f4);
@@ -832,19 +1090,46 @@ export class World {
       }
       return kits.get(kind);
     };
+    // snap: wall kits are raycast onto the actual building mesh (offset along the hit normal), ground kits sit on
+    // the terrain; a wall kit with no surface within tolerance is dropped instead of floating.
+    const ray = new THREE.Raycaster(), o = new THREE.Vector3(), dir = new THREE.Vector3(), nW = new THREE.Vector3();
+    const WALL_Y = { wreath: 2.05, garland: 2.75 }, TOL = 1.6;
+    let dropped = 0;
+    const wallHit = (b, x, z, y, fx, fz) => {
+      o.set(x + fx * 3, y, z + fz * 3); dir.set(-fx, 0, -fz); ray.set(o, dir); ray.far = 3 + TOL;
+      const h = ray.intersectObject(b.holder, true).find(h => h.face && !h.object.userData.noSnap);
+      if (!h) return null;
+      nW.copy(h.face.normal).transformDirection(h.object.matrixWorld);
+      if (h.face && (h.object.material?.side === THREE.DoubleSide) && nW.dot(dir) > 0) nW.negate();
+      if (Math.abs(nW.y) > 0.5) return null;
+      return { p: h.point.clone(), n: nW.clone(), d: h.distance - 3 };
+    };
+    this.decoPlaced = [];
     for (const d of this.deco) {
       if (this.q.name === 'low' && !['wreath'].includes(d.kind)) continue;
-      kit(d.kind).list.push(d);
+      if ((d.kind === 'wreath' || d.kind === 'garland') && d.b) { // built in holder space flush on the real door/facade
+        const geo = d.b.isGLB ? this.doorDecorGeo(d.kind, d.b) : null;
+        if (!geo) { dropped++; continue; }
+        const key = d.kind + ':' + d.b.type; if (!kits.has(key)) kits.set(key, { geo, list: [] });
+        d.mat = d.b.holder.matrixWorld; d.attached = true; kits.get(key).list.push(d); this.decoPlaced.push(d); continue;
+      }
+      if (d.lift === 0 && d.b?.holder) {
+        const f = d.b.front, base = d.b.holder.position.y || 0, y = base + (WALL_Y[d.kind] ?? 2);
+        const c = wallHit(d.b, d.x, d.z, y, f.x, f.z);
+        if (!c) { dropped++; continue; }
+        d.x = c.p.x + c.n.x * 0.02; d.z = c.p.z + c.n.z * 0.02; d.rot = Math.atan2(c.n.x, c.n.z); d.y = base; d.wallN = [c.n.x, c.n.z];
+      } else d.y = this.heightAt(d.x, d.z) + d.lift;
+      kit(d.kind).list.push(d); this.decoPlaced.push(d);
     }
+    if (dropped) console.info(`[decor] dropped ${dropped} wall kits with no wall surface in tolerance`);
     let draws = 0;
     for (const [kind, { geo, list }] of kits) {
       for (const [g, mat] of [[geo.lit, M.lit], [geo.glow, M.glow]]) {
         if (!g) continue;
         const im = new THREE.InstancedMesh(g, mat, list.length);
         list.forEach((d, i) => {
-          // wall-mounted kits keep their height; ground kits sit in the snow
-          const y = d.lift === 0 ? 0 : this.heightAt(d.x, d.z) + d.lift;
-          m4.compose(pv.set(d.x, y, d.z), q.setFromAxisAngle(up, d.rot), sc.setScalar(d.s)); im.setMatrixAt(i, m4);
+          if (d.mat) { im.setMatrixAt(i, d.mat); return; }
+          m4.compose(pv.set(d.x, d.y, d.z), q.setFromAxisAngle(up, d.rot), sc.setScalar(d.s)); im.setMatrixAt(i, m4);
         });
         im.castShadow = mat === M.lit && kind !== 'wreath'; im.computeBoundingSphere(); this.root.add(im); draws++;
       }
@@ -863,14 +1148,38 @@ export class World {
     console.info(`[world] decorations: ${this.deco.length} kits in ${kits.size} types, ${this.snowmen.length} snowmen, ${draws} instanced draws`);
   }
 
+  /** Automated floating-decor audit: every wall kit must sit on a building surface (<0.15 m) and every ground
+   *  prop must touch the snow (gap below <0.15 m). Returns {floating, checked, items:[...]}. */
+  floatingDecor(extra = []) {
+    const ray = new THREE.Raycaster(), o = new THREE.Vector3(), dir = new THREE.Vector3(), bad = [];
+    const WALL_Y = { wreath: 2.05, garland: 2.75 }; let n = 0;
+    for (const d of this.decoPlaced || []) {
+      if (d.attached) continue; // surface-attached kits are audited by decorGaps()
+      n++;
+      if (d.wallN) {
+        const [nx, nz] = d.wallN, y = d.y + (WALL_Y[d.kind] ?? 2);
+        o.set(d.x + nx * 0.6, y, d.z + nz * 0.6); dir.set(-nx, 0, -nz); ray.set(o, dir); ray.far = 2;
+        const h = ray.intersectObject(d.b.holder, true)[0], gap = h ? h.distance - 0.6 : 9;
+        if (gap > 0.15) bad.push({ kind: d.kind, x: +d.x.toFixed(1), z: +d.z.toFixed(1), gap: +gap.toFixed(2) });
+      } else {
+        const gap = d.y - this.heightAt(d.x, d.z);
+        if (gap > 0.15) bad.push({ kind: d.kind, x: +d.x.toFixed(1), z: +d.z.toFixed(1), gap: +gap.toFixed(2) });
+      }
+    }
+    const ground = (kind, x, y, z) => { n++; const gap = y - this.heightAt(x, z); if (gap > 0.15) bad.push({ kind, x: +x.toFixed(1), z: +z.toFixed(1), gap: +gap.toFixed(2) }); };
+    for (const [x, z] of this.snowmen) ground('snowman', x, this.heightAt(x, z) - 0.06, z);
+    for (const [x, z] of this.lamps || []) ground('lamp', x, this.lampBaseY?.(x, z) ?? 0, z);
+    for (const [x, z] of this.fenceList || []) ground('fence', x, this.fenceBaseY?.(x, z) ?? 0, z);
+    for (const t of extra) ground(t.kind || 'pine', t.x, t.y, t.z);
+    const r = { floating: bad.length, checked: n, items: bad.slice(0, 30) };
+    console.info(`[decor] floating: ${bad.length} (checked ${n})`);
+    return r;
+  }
+
   // -------------------------------------------------------------- forest
   makeForest() {
     const n = Math.round(W.forestTrees * this.q.forestScale);
-    // Tripo pine GLB (instanced) on medium/high; light procedural pine on low
-    const parts = this.pineParts();
-    const insts = parts ? parts.map(({ geometry, material }) => new THREE.InstancedMesh(geometry, material, n))
-      : [new THREE.InstancedMesh(pineGeometry(), new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.92 }), n)];
-    const inst = { setMatrixAt: (i, m) => insts.forEach(x => x.setMatrixAt(i, m)) };
+    this.pineTrees = this.pineTrees || [];
     const m4 = new THREE.Matrix4(), q = new THREE.Quaternion(), sc = new THREE.Vector3(), p = new THREE.Vector3();
     let c = 0, tries = 0;
     this.trees = [];
@@ -879,9 +1188,9 @@ export class World {
       tries++;
       let x, z;
       const mode = R();
-      if (mode < 0.55) { const a = R() * Math.PI * 2; const r = W.radius - 14 + R() * 70; x = Math.cos(a) * r; z = Math.sin(a) * r; } // forest edge ring
+      if (mode < 0.55) { const a = R() * Math.PI * 2; const r = (W.forestStart ?? W.radius - 14) + Math.pow(R(), 1.7) * 85; x = Math.cos(a) * r; z = Math.sin(a) * r; } // forest edge ring
       else if (mode < 0.72) { const a = R() * Math.PI * 2; const r = R.range(0, 1); x = W.lakeCenter[0] + Math.cos(a) * (W.lakeRadii[0] + 6 + r * 22); z = W.lakeCenter[1] + Math.sin(a) * (W.lakeRadii[1] + 6 + r * 22); } // around the lake
-      else { const a = R() * Math.PI * 2; const r = R.range(W.squareRadius + 8, W.radius - 10); x = Math.cos(a) * r; z = Math.sin(a) * r; } // scattered
+      else { const a = R() * Math.PI * 2; const r = R.range((W.forestStart ?? 60) - 14, W.radius + 20); x = Math.cos(a) * r; z = Math.sin(a) * r; } // scattered fringe
       const dr = this.distToRoad(x, z);
       if (dr < W.roadWidth / 2 + 2.5) continue;
       if (this.inLake(x, z, 2)) continue;
@@ -889,13 +1198,11 @@ export class World {
       if (this.buildingAt(x, z, 3)) continue;
       if (this.lamps.some(l => (l[0] - x) ** 2 + (l[1] - z) ** 2 < 9)) continue;
       const s = R.range(0.7, 1.45);
-      p.set(x, 0, z); q.setFromAxisAngle(new THREE.Vector3(0, 1, 0), R() * 6.28); sc.set(s, s * R.range(0.9, 1.15), s);
-      m4.compose(p, q, sc); inst.setMatrixAt(c++, m4);
+      this.pineTrees.push({ x, z, s, sy: R.range(0.9, 1.15), r: R() * 6.28, y: 0 }); c++;
       if (Math.hypot(x, z) < W.radius + 2) this.addCircle(x, z, 0.55 * s);
       this.trees.push([x, z, s]);
     }
-    for (const im of insts) { im.count = c; im.castShadow = this.q.name !== 'low'; im.receiveShadow = !!parts; im.computeBoundingSphere(); this.root.add(im); }
-    this.forest = insts;
+    this.forest = [];
   }
 
   makeProps() {
@@ -950,7 +1257,7 @@ export class World {
   }
 
   // -------------------------------------------------------------- collision
-  addCircle(x, z, r) { this.colliders.push({ kind: 'c', x, z, r }); }
+  addCircle(x, z, r, h = Infinity) { this.colliders.push({ kind: 'c', x, z, r, h }); }
   addBox(x, z, hw, hd, rot, h = 3, building = null) { this.colliders.push({ kind: 'b', x, z, hw, hd, rot, c: Math.cos(rot), s: Math.sin(rot), h, building }); }
   indexCollider(c) {
     const ext = c.kind === 'c' ? c.r : Math.hypot(c.hw, c.hd);
@@ -970,11 +1277,23 @@ export class World {
     return null;
   }
 
+  /** walkable surface height under (x,z): max of snow terrain and the paved road/square layers (raycast down) */
+  surfaceAt(x, z) {
+    const h = this.heightAt ? this.heightAt(x, z) : 0;
+    if (Math.hypot(x, z) < W.squareRadius - 0.3) return { y: Math.max(h, this.squareMesh?.position.y ?? 0.05), paved: true };
+    if (this.roadMesh && this.distToRoad(x, z) < W.roadWidth / 2 + 0.9) {
+      const rc = this._sray || (this._sray = new THREE.Raycaster(undefined, new THREE.Vector3(0, -1, 0), 0, 4));
+      rc.ray.origin.set(x, 2, z); const hit = rc.intersectObject(this.roadMesh, false)[0];
+      if (hit && hit.point.y >= h - 0.005) return { y: hit.point.y, paved: true };
+    }
+    return { y: h, paved: false };
+  }
   /** push a circle (x,z,r) out of colliders; returns corrected {x,z} */
-  collide(pos, r) {
+  collide(pos, r, feetY = 0) {
     for (let it = 0; it < 2; it++) {
       const list = this.query(pos.x, pos.z);
       for (const c of list) {
+        if (feetY > 0 && feetY >= (c.h ?? Infinity)) continue; // jumping over a low prop (fence, bench, sled)
         if (c.kind === 'c') {
           const dx = pos.x - c.x, dz = pos.z - c.z; const d = Math.hypot(dx, dz); const m = c.r + r;
           if (d < m && d > 1e-5) { pos.x = c.x + dx / d * m; pos.z = c.z + dz / d * m; }

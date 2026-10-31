@@ -47,6 +47,7 @@ function buildGoggle({ proxy, lx, ly, k, frontZ, hc }) {
 
 const CLS = { OTHER: 0, RED: 1, FUR: 2, BLACK: 3, WHITE: 4, EDGE: 5 };
 const v0 = new THREE.Vector3(), v1 = new THREE.Vector3(), v2 = new THREE.Vector3(), q0 = new THREE.Quaternion(), q1 = new THREE.Quaternion();
+const _qa = new THREE.Quaternion(), _va = new THREE.Vector3();
 const findBone = (model, n) => { let b = null; model.traverse(o => { if (!b && o.isBone && o.name.replace(/[^a-z0-9]/gi, '').toLowerCase().endsWith(n.toLowerCase())) b = o; }); return b; };
 
 // ---------------------------------------------------------------- materials
@@ -423,6 +424,56 @@ export function glbMascot(root, glb, entry, gift, makeCarryIK, quality = 'high')
   if (act.jump) { act.jump.setLoop(THREE.LoopOnce, 1); act.jump.clampWhenFinished = true; act.jump.stop(); }
   const W = { idle: 1, walk: 0, run: 0, jump: 0 };
 
+  // ---- grounding: sole offsets from the skinned feet (not the bind-pose bbox) + clip stride calibration
+  const GR = C.grounding || {};
+  const feet = (() => {
+    const L = findBone(model, 'LeftFoot'), R = findBone(model, 'RightFoot'), tL = findBone(model, 'LeftToeBase'), tR = findBone(model, 'RightToeBase');
+    if (!L || !R) return null;
+    // in-place clips: some Tripo clips carry a constant forward hips offset (run: +0.65 m) -> strip the mean x/z drift
+    const hipsB = findBone(model, 'Hips');
+    if (hipsB) for (const k of ['walk', 'run', 'idle', 'jump']) {
+      const clip = act[k]?.getClip(); const tr = clip?.tracks.find(t => t.name === hipsB.name + '.position'); if (!tr) continue;
+      const v = tr.values, n = v.length / 3; let mx = 0, mz = 0; for (let i = 0; i < n; i++) { mx += v[i * 3]; mz += v[i * 3 + 2]; }
+      mx = mx / n - hipsB.position.x; mz = mz / n - hipsB.position.z; for (let i = 0; i < n; i++) { v[i * 3] -= mx; v[i * 3 + 2] -= mz; }
+    }
+    const legs = ['LeftUpLeg', 'RightUpLeg', 'LeftLeg', 'RightLeg'].map(n => findBone(model, n)).filter(Boolean).map(b => ({ b, rest: b.quaternion.clone() }));
+    root.updateMatrixWorld(true);
+    const inv = new THREE.Matrix4().copy(root.matrixWorld).invert(), loc = (b) => new THREE.Vector3().setFromMatrixPosition(b.matrixWorld).applyMatrix4(inv);
+    // lowest rest-pose vertex dominated by a foot/toe bone = the boot sole
+    const set = new Set([L, R, tL, tR].filter(Boolean)); let minY = Infinity;
+    for (const I of info) {
+      const si = I.mesh.geometry.attributes.skinIndex, sw = I.mesh.geometry.attributes.skinWeight, bones = I.mesh.skeleton.bones;
+      for (let i = 0; i < I.n; i++) {
+        let best = 0, bi = -1; for (let k = 0; k < 4; k++) { const w = sw.getComponent(i, k); if (w > best) { best = w; bi = si.getComponent(i, k); } }
+        if (set.has(bones[bi]) && I.P[i * 3 + 1] < minY) minY = I.P[i * 3 + 1];
+      }
+    }
+    if (!isFinite(minY)) minY = 0;
+    const f = { legs, L, R, tL: tL || L, tR: tR || R, dA: loc(L).y - minY, dT: loc(tL || L).y - minY, inv: new THREE.Matrix4(), v: new THREE.Vector3(),
+      up: [true, true], off: 0, minY };
+    // stride calibration: how fast the stance foot slides backwards in each in-place clip (m/s at timeScale 1)
+    const speedOf = (clip) => {
+      if (!clip) return 0;
+      const tm = new THREE.AnimationMixer(model), a = tm.clipAction(clip); a.play();
+      const N = 60, d = clip.duration; let travel = 0, prev = null, zr = [1e9, -1e9, 1e9, -1e9, 1e9, -1e9, 1e9, -1e9]; const hips = findBone(model, 'Hips');
+      for (let i = 0; i <= N; i++) {
+        tm.setTime(i / N * d); model.updateMatrixWorld(true);
+        const cur = [loc(L), loc(R)], hp = hips ? loc(hips) : cur[0];
+        zr[0] = Math.min(zr[0], cur[0].z); zr[1] = Math.max(zr[1], cur[0].z); zr[2] = Math.min(zr[2], cur[0].x); zr[3] = Math.max(zr[3], cur[0].x);
+        zr[4] = Math.min(zr[4], hp.z); zr[5] = Math.max(zr[5], hp.z); zr[6] = Math.min(zr[6], hp.y); zr[7] = Math.max(zr[7], hp.y);
+        if (prev) { const k = cur[0].y < cur[1].y ? 0 : 1; if ((prev[0].y < prev[1].y ? 0 : 1) === k) travel += Math.hypot(cur[k].x - prev[k].x, cur[k].z - prev[k].z); }
+        prev = cur;
+      }
+      a.stop(); tm.uncacheRoot(model);
+      (f.dbg ||= []).push({ d: +d.toFixed(2), z: zr.map(v => +v.toFixed(3)), travel: +travel.toFixed(3) });
+      return travel / d;
+    };
+    f.vWalk = speedOf(act.walk?.getClip()); f.vRun = speedOf(act.run?.getClip());
+    return f;
+  })();
+  api.grounding = () => feet && { soleDropAnkle: +feet.dA.toFixed(3), soleDropToe: +feet.dT.toFixed(3), restSoleY: +feet.minY.toFixed(3), clipSpeedWalk: +feet.vWalk.toFixed(2), clipSpeedRun: +feet.vRun.toFixed(2), off: +feet.off.toFixed(3), walkTS: act.walk?.timeScale, runTS: act.run?.timeScale, dbg: feet.dbg, scale: model.scale.x, rootScale: root.getWorldScale(new THREE.Vector3()).x, h: info.reduce((m, I) => { for (let i = 1; i < I.P.length; i += 3) m = Math.max(m, I.P[i]); return m; }, 0) };
+  api.stepEvents = !!feet;
+
   // ---- gift on the chest, held by both hands (2-bone IK)
   const bone = findBone(model, (entry.holdBone || 'Spine1').replace(/^mixamorig/, ''));
   if (bone) {
@@ -443,6 +494,13 @@ export function glbMascot(root, glb, entry, gift, makeCarryIK, quality = 'high')
     if (act.jump && v >= C.jumpVelocity * 0.9) { act.jump.reset(); act.jump.play(); act.jump.setEffectiveWeight(1); W.jump = 1; act.jump.timeScale = 1.25; }
     return true;
   };
+  // player jump (physics in main.js): play the rig's jump clip (else procedural tuck), stretch, surprised face
+  api.jumpStart = () => {
+    st.sqv += 2.6; st.jumpT = 0;
+    if (act.jump) { act.jump.reset(); act.jump.play(); act.jump.setEffectiveWeight(1); W.jump = 1; act.jump.timeScale = 1.15; }
+    api.emote(C.expressions.jump || 'surprised', 3);
+  };
+  api.land = (impact = 0.5) => { st.sqv -= 3.6 * impact + 1.0; st.moodT = Math.min(st.moodT, 0.35); };
   api.celebrate = () => { api.emote(C.expressions.deliver, C.expressions.deliverHold); if (!st.air) api.jump(C.celebrateHop); };
   api.emote = (name, hold = 1) => { st.mood = name; st.moodT = hold; };
   api.state = { storm: 0, ice: false, slow: false, boosted: false };
@@ -453,16 +511,30 @@ export function glbMascot(root, glb, entry, gift, makeCarryIK, quality = 'high')
     st.t += dt;
     // -- clip weights: damped toward targets (smooth blends)
     const w = THREE.MathUtils.clamp(speed / 2.4, 0, 1), r = THREE.MathUtils.clamp((speed - 5.5) / 4, 0, 1);
-    const tgt = { idle: 1 - w, walk: w * (1 - r), run: w * r };
+    const r2 = feet && GR.strideSync !== false ? THREE.MathUtils.clamp((speed - 1.8) / 1.6, 0, 1) : r; // short-legged rig: run cycle from a brisk pace
+    const tgt = { idle: 1 - w, walk: w * (1 - r2), run: w * r2 };
     const kk = 1 - Math.exp(-dt * 8);
     for (const k of ['idle', 'walk', 'run']) W[k] += (tgt[k] - W[k]) * kk;
-    if (act.jump && W.jump > 0) { if (!st.air) W.jump = Math.max(0, W.jump - dt * 5); }
+    if (act.jump && W.jump > 0) { if (!st.air && !api.extAir) W.jump = Math.max(0, W.jump - dt * 5); }
     const ground = 1 - W.jump;
     if (act.idle) act.idle.setEffectiveWeight(W.idle * ground);
-    if (act.walk) { act.walk.setEffectiveWeight(W.walk * ground); act.walk.timeScale = THREE.MathUtils.clamp(speed / 4.2, 0.7, 1.9); }
-    if (act.run) { act.run.setEffectiveWeight(W.run * ground); act.run.timeScale = THREE.MathUtils.clamp(speed / 8.5, 0.8, 1.6); }
+    // stride sync: playback rate = ground speed / calibrated clip speed (no foot sliding), smoothed
+    // ground speed of a clip ~ clipSpeed * timeScale * strideAmp (thigh/knee swing amplified about the rest pose)
+    const sync = GR.strideSync !== false && feet, ok = v => v > 0.2 && v < 20;
+    const solve = (v, tsMax) => { const want = speed / v; const k = THREE.MathUtils.clamp(want / tsMax, 1, GR.strideAmpMax ?? 1.7); return [THREE.MathUtils.clamp(want / k, 0.45, tsMax), k]; };
+    const [tsW, kW] = sync && ok(feet.vWalk) ? solve(feet.vWalk, 2.2) : [THREE.MathUtils.clamp(speed / 4.2, 0.7, 1.9), 1];
+    const [tsR, kR] = sync && ok(feet.vRun) ? solve(feet.vRun, GR.runCadenceMax ?? 3.2) : [THREE.MathUtils.clamp(speed / 8.5, 0.8, 1.6), 1];
+    const ampT = (W.walk * kW + W.run * kR) / Math.max(1e-3, W.walk + W.run) || 1;
+    st.amp = (st.amp ?? 1) + (ampT - (st.amp ?? 1)) * (1 - Math.exp(-dt * 8));
+    const kts = 1 - Math.exp(-dt * 10);
+    if (act.walk) { act.walk.setEffectiveWeight(W.walk * ground); act.walk.timeScale += (tsW - act.walk.timeScale) * kts; }
+    if (act.run) { act.run.setEffectiveWeight(W.run * ground); act.run.timeScale += (tsR - act.run.timeScale) * kts; }
     if (act.jump) act.jump.setEffectiveWeight(W.jump);
     mixer.update(dt);
+    if (feet && st.amp > 1.001 && !api.extAir) for (const Lg of feet.legs) { // stride amplification (longer steps, same cadence)
+      _qa.copy(Lg.rest).invert().multiply(Lg.b.quaternion); const ang = 2 * Math.acos(THREE.MathUtils.clamp(_qa.w, -1, 1));
+      if (ang > 1e-4) { _va.set(_qa.x, _qa.y, _qa.z).normalize(); _qa.setFromAxisAngle(_va, Math.min(2.6, ang * st.amp)); Lg.b.quaternion.copy(Lg.rest).multiply(_qa); }
+    }
 
     // -- jump / hop
     if (st.air) {
@@ -475,7 +547,7 @@ export function glbMascot(root, glb, entry, gift, makeCarryIK, quality = 'high')
     st.sqv += (-st.sq * 160 - st.sqv * 13) * dt; st.sq += st.sqv * dt;
     const sq = THREE.MathUtils.clamp(st.sq, -0.2, 0.18) - step + (st.air ? THREE.MathUtils.clamp(st.vy * 0.012, -0.05, 0.08) : 0);
     squash.scale.set(1 - sq * 0.5, 1 + sq, 1 - sq * 0.5);
-    lean.position.y = st.y;
+    lean.position.y = (feet ? feet.off : 0) + st.y + (api.extY || 0);
     // -- lean into turns (roll) + accelerate / brake pitch
     const yaw = root.rotation.y;
     let turn = 0; if (st.lastYaw !== null && dt > 0) { let d = yaw - st.lastYaw; d = Math.atan2(Math.sin(d), Math.cos(d)); turn = d / dt; } st.lastYaw = yaw;
@@ -493,6 +565,24 @@ export function glbMascot(root, glb, entry, gift, makeCarryIK, quality = 'high')
     }
     if (spine2) { q0.setFromEuler(new THREE.Euler(0, 0, -st.lean * 0.4)); spine2.quaternion.multiply(q0); }
     model.updateMatrixWorld(true);
+    // -- foot grounding: put the lowest boot sole exactly on the surface (root y = ground), emit plant events
+    if (feet) {
+      root.updateWorldMatrix(true, true); feet.inv.copy(root.matrixWorld).invert();
+      const ly = b => feet.v.setFromMatrixPosition(b.matrixWorld).applyMatrix4(feet.inv).y;
+      const cur = lean.position.y;
+      const sole = [Math.min(ly(feet.L) - feet.dA, ly(feet.tL) - feet.dT) - cur, Math.min(ly(feet.R) - feet.dA, ly(feet.tR) - feet.dT) - cur];
+      const low = Math.min(sole[0], sole[1]);
+      if (!st.air && !api.extAir) {
+        const want = THREE.MathUtils.clamp(-low, -0.3, 0.3);
+        feet.off += (want - feet.off) * (1 - Math.exp(-dt * (GR.footSnap ?? 25)));
+      }
+      lean.position.y = feet.off + st.y + (api.extY || 0); lean.updateMatrixWorld(true);
+      if (!api.extAir && !st.air && speed > 0.6) for (let k = 0; k < 2; k++) {
+        const h = sole[k] - low;
+        if (feet.up[k] && h < 0.02) { feet.up[k] = false; api.onStep?.(feet.v.setFromMatrixPosition((k ? feet.tR : feet.tL).matrixWorld), k, Math.min(1, speed / 11)); }
+        else if (!feet.up[k] && h > 0.07) feet.up[k] = true;
+      }
+    }
     if (ik) ik();
     // -- pom-pom spring (verlet-ish point following the rigid tip)
     if (pom && pomTip) {

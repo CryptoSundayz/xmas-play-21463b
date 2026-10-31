@@ -1,7 +1,7 @@
-// Keyboard (WASD/arrows + Shift), mouse-drag camera, mobile joystick + sprint button + touch-drag camera.
+// Keyboard (WASD/arrows + Shift), mouse-drag camera, mobile joystick (auto-sprint) + JUMP button + touch-drag camera.
 export class Input {
   constructor(canvas) {
-    this.keys = new Set(); this.joy = { x: 0, y: 0, active: false }; this.sprintBtn = false;
+    this.keys = new Set(); this.joy = { x: 0, y: 0, active: false }; this.jumpBtn = false;
     this.camDelta = 0; this.lastManualCam = -1e9; this.paused = false;
     this.isTouch = matchMedia('(pointer: coarse)').matches || 'ontouchstart' in window;
     addEventListener('keydown', e => {
@@ -20,7 +20,7 @@ export class Input {
   }
   setupTouch(canvas) {
     const zone = document.getElementById('joyZone'), knob = document.getElementById('joyKnob'), base = document.getElementById('joyBase');
-    const sprint = document.getElementById('sprintBtn');
+    const jump = document.getElementById('jumpBtn');
     let jid = null, cx = 0, cy = 0; const R = 55;
     const setKnob = (dx, dy) => { knob.style.transform = `translate(${dx}px, ${dy}px)`; };
     zone?.addEventListener('pointerdown', e => {
@@ -37,8 +37,8 @@ export class Input {
     zone?.addEventListener('pointermove', move);
     const end = e => { if (e.pointerId !== jid) return; jid = null; this.joy = { x: 0, y: 0, active: false }; setKnob(0, 0); };
     zone?.addEventListener('pointerup', end); zone?.addEventListener('pointercancel', end);
-    sprint?.addEventListener('pointerdown', e => { this.sprintBtn = true; sprint.classList.add('on'); e.preventDefault(); });
-    for (const ev of ['pointerup', 'pointercancel', 'pointerleave']) sprint?.addEventListener(ev, () => { this.sprintBtn = false; sprint.classList.remove('on'); });
+    jump?.addEventListener('pointerdown', e => { this.jumpBtn = true; jump.classList.add('on'); jump.setPointerCapture?.(e.pointerId); e.preventDefault(); e.stopPropagation(); });
+    for (const ev of ['pointerup', 'pointercancel', 'lostpointercapture']) jump?.addEventListener(ev, () => { this.jumpBtn = false; jump.classList.remove('on'); });
     // touch-drag camera on the canvas (right side)
     let tid = null, tx = 0;
     canvas.addEventListener('pointerdown', e => { if (e.pointerType !== 'mouse' && tid === null) { tid = e.pointerId; tx = e.clientX; } });
@@ -55,6 +55,6 @@ export class Input {
     const m = Math.hypot(x, y); if (m > 1) { x /= m; y /= m; }
     return { x, y };
   }
-  get sprint() { return this.keys.has('ShiftLeft') || this.keys.has('ShiftRight') || this.sprintBtn || (this.joy.active && Math.hypot(this.joy.x, this.joy.y) > 0.98 && false); }
+  get sprint() { return this.keys.has('ShiftLeft') || this.keys.has('ShiftRight'); } // touch: auto-sprint in main.js
   takeCamDelta() { const d = this.camDelta; this.camDelta = 0; const q = (this.keys.has('KeyQ') ? 1 : 0) - (this.keys.has('KeyE') ? 1 : 0); return d + q * 0.035; }
 }

@@ -5,10 +5,16 @@
 <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover" />
 <meta name="theme-color" content="#050b18" />
 <title>Santa's Block Delivery — Optimum mump2p</title>
-<link rel="icon" href="data:," />
+<link rel="icon" type="image/png" href="assets/icons/icon-192.png" />
+<link rel="manifest" href="manifest.webmanifest" />
+<meta name="mobile-web-app-capable" content="yes" />
+<meta name="apple-mobile-web-app-capable" content="yes" />
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+<meta name="apple-mobile-web-app-title" content="Block Delivery" />
+<link rel="apple-touch-icon" href="assets/icons/apple-touch-icon.png" />
 <link rel="stylesheet" href="style.css" />
 <script type="importmap">
-{ "imports": { "three": "./vendor/three/three.module.js", "three/addons/": "./vendor/three/addons/" } }
+{ "imports": { "three": "./vendor/three/three.module.js", "three/addons/": "./vendor/three/addons/", "three-mesh-bvh": "./vendor/three-mesh-bvh/index.module.js" } }
 </script>
 </head>
 <body>
@@ -16,6 +22,7 @@
 
 <!-- ============================== HUD -->
 <div id="hud" class="hidden">
+  <div id="navEdge"></div><div id="navDist"></div><div id="housesLeft"></div>
   <div id="hudScore" class="panel">
     <div class="lbl" id="scoreLabel">Staked ETH</div>
     <div class="big"><span id="scoreVal">0</span> <span class="unit" id="scoreUnit">ETH</span></div>
@@ -42,12 +49,14 @@
   <div id="stormWarn">❄ SNOWSTORM — visibility low</div>
   <div id="holdHint"></div>
   <button id="pauseBtn" title="Pause">II</button>
+  <button id="muteBtn" class="hudBtn" title="Mute (M)" aria-label="Mute">🔊</button>
+  <button id="fsBtn" class="hudBtn hidden" title="Fullscreen" aria-label="Fullscreen">⛶</button>
 </div>
 
 <!-- mobile controls -->
 <div id="touchUI" class="hidden">
   <div id="joyZone"><div id="joyBase"><div id="joyKnob"></div></div></div>
-  <button id="sprintBtn">SPRINT</button>
+  <button id="jumpBtn" aria-label="Jump"><span>JUMP</span></button>
 </div>
 
 <!-- ============================== Screens -->
@@ -61,8 +70,8 @@
       Grab the <span class="blue">Optimum</span> pickups and <b>mump2p</b> splits the block into shards that reach everyone at once — <b id="storyOpt">135.6 ms</b>, about <b>3x faster</b>.</p>
     <div class="how">
       <div><b>Move</b> WASD / arrows · joystick</div>
-      <div><b>Sprint</b> Shift · SPRINT button</div>
-      <div><b>Jump</b> Space</div>
+      <div><b>Sprint</b> Shift · push the joystick to the edge</div>
+      <div><b>Jump</b> Space · JUMP button (clears fences)</div>
       <div><b>Camera</b> drag mouse / swipe · Q/E</div>
       <div><b>Deliver</b> stand at a <span class="blue">blue-marked</span> door</div>
       <div><b>Watch out</b> snowstorms, ice, flickering slow nodes</div>
@@ -73,6 +82,7 @@
       <label>Quality <select id="selQuality"><option value="auto">Auto</option><option value="low">Low</option><option value="medium">Medium</option><option value="high">High</option></select></label>
     </div>
     <button id="playBtn" class="cta">Start delivering</button>
+    <button id="fsBtnTitle" class="ghost hidden">⛶ Fullscreen</button>
     <div class="foot" id="titleFoot">Target: 3M+ ETH staked</div>
   </div>
 </div>
@@ -92,6 +102,9 @@
   <p id="endSub"></p>
   <button id="endBtn" class="cta">Play again</button>
 </div>
+
+<div id="iosTip" class="hidden"><b>Play fullscreen:</b> tap <span class="shareIco">⎋</span> Share → <b>Add to Home Screen</b>, then open it from your home screen. <button id="iosTipX" aria-label="Close">✕</button></div>
+<div id="rotateHint" class="hidden"><div class="rotIco">⟳</div>Rotate your phone to landscape for the best view<button id="rotateX">Play in portrait</button></div>
 
 <div id="loading" class="screen"><div class="spinner"></div><div>Building the village…</div></div>
 

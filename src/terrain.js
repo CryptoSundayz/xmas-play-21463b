@@ -22,6 +22,17 @@ export function buildTerrain(world) {
       const d = Math.hypot(i * RC - R0 - p.x, j * RC - R0 - p.z); const k = j * RN + i; if (d < rd[k]) rd[k] = d;
     }
   }
+  // door paths: stamped as narrow "streets" (distance biased so roadD - rw/2 = distance to the path edge)
+  for (const q of world.paths || []) {
+    const len = Math.hypot(q.x1 - q.x0, q.z1 - q.z0), n = Math.ceil(len / 0.5), bias = (rw - q.w) / 2 + 0.35, K = 6;
+    for (let t = 0; t <= n; t++) {
+      const px = q.x0 + (q.x1 - q.x0) * t / n, pz = q.z0 + (q.z1 - q.z0) * t / n;
+      const ci = Math.round((px + R0) / RC), cj = Math.round((pz + R0) / RC);
+      for (let i = Math.max(0, ci - K); i <= Math.min(RN - 1, ci + K); i++) for (let j = Math.max(0, cj - K); j <= Math.min(RN - 1, cj + K); j++) {
+        const d = Math.hypot(i * RC - R0 - px, j * RC - R0 - pz) + bias; const k = j * RN + i; if (d < rd[k]) rd[k] = d;
+      }
+    }
+  }
   const roadD = (x, z) => {
     const fx = (x + R0) / RC, fz = (z + R0) / RC; const i = Math.max(0, Math.min(RN - 2, Math.floor(fx))), j = Math.max(0, Math.min(RN - 2, Math.floor(fz)));
     const u = Math.min(1, Math.max(0, fx - i)), v = Math.min(1, Math.max(0, fz - j));

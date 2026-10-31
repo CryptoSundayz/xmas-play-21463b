@@ -1,21 +1,25 @@
 // Santa's Block Delivery — game bootstrap, loop and state machine.
 import * as THREE from 'three';
-import { PostFX, loadEnvironment, LampCones, Footprints, ChimneySmoke, Sparkles, Shockwaves, Governor } from './fx.js';
+import { PostFX, loadEnvironment, LampCones, Footprints, SnowPuffs, ChimneySmoke, Sparkles, Shockwaves, Governor } from './fx.js';
 import { CONFIG, applyUrlOverrides, resolveQuality, difficulty, ethPerBlock, formatEth, comboMult, fmt } from './config.js';
 import { initAssets } from './assets.js';
 import { World } from './world.js';
+import { Interiors } from './interiors.js';
+import { PineSystem } from './pines.js';
 import { createSanta } from './santa.js';
 import { Input } from './input.js';
 import { HUD } from './hud.js';
 import { Snow, Particles, Flights, Fireworks } from './effects.js';
 import { makeLogoMesh, logoSVG } from './logo.js';
 import { WINDOW_WARM, WINDOW_BLUE } from './materials.js';
-import { initAudio, sfx } from './audio.js';
+import { initAudio, sfx, music, audioState, configureAudio } from './audio.js';
 import { rng, clamp, lerp, damp, angleDamp, angleDiff, glowTexture, textTexture, worldUV } from './util.js';
 
 applyUrlOverrides();
 const params = new URLSearchParams(location.search);
 const Q = resolveQuality();
+const QA_FIXED_EARLY = !!params.get('qa');
+const DEBUG = params.get('debug') === '1';
 const B = CONFIG.branding;
 const X = CONFIG.boosted;
 const isTouch = matchMedia('(pointer: coarse)').matches || 'ontouchstart' in window;
@@ -25,8 +29,23 @@ const $ = id => document.getElementById(id);
 // ------------------------------------------------------------- renderer
 const canvas = $('c');
 const renderer = new THREE.WebGLRenderer({ canvas, antialias: Q.antialias, powerPreference: 'high-performance' });
-renderer.setPixelRatio(Math.min(devicePixelRatio, Q.pixelRatio));
-renderer.setSize(innerWidth, innerHeight);
+// ---- robust sizing: visualViewport (iOS address bar / rotation), drawing buffer capped to the GPU limits + a pixel budget
+const PERF = CONFIG.performance;
+const GL_MAX = (() => { const gl = renderer.getContext(); return Math.min(gl.getParameter(gl.MAX_RENDERBUFFER_SIZE), gl.getParameter(gl.MAX_TEXTURE_SIZE), ...(gl.getParameter(gl.MAX_VIEWPORT_DIMS) || [16384])); })();
+let dynScale = 1;
+function viewSize() {
+  const vv = window.visualViewport;
+  const w = Math.round(vv?.width || innerWidth) || innerWidth, h = Math.round(vv?.height || innerHeight) || innerHeight;
+  return [Math.max(1, w), Math.max(1, h)];
+}
+function pixelRatioFor(w, h) {
+  let pr = Math.min(devicePixelRatio || 1, Q.pixelRatio) * dynScale;
+  const budget = Q.mobile ? PERF.maxPixels.mobile : PERF.maxPixels.desktop;
+  pr = Math.min(pr, Math.sqrt(budget / (w * h)), (GL_MAX - 2) / w, (GL_MAX - 2) / h);
+  return Math.max(0.35, pr);
+}
+renderer.setPixelRatio(pixelRatioFor(...viewSize()));
+renderer.setSize(...viewSize());
 const LOOK = CONFIG.look;
 renderer.toneMapping = LOOK.toneMapping === 'AgX' ? THREE.AgXToneMapping : THREE.ACESFilmicToneMapping; renderer.toneMappingExposure = LOOK.exposure;
 renderer.outputColorSpace = THREE.SRGBColorSpace;
@@ -36,13 +55,13 @@ const scene = new THREE.Scene();
 const FOG_COLOR = new THREE.Color(CONFIG.weather.fogColor), STORM_FOG = new THREE.Color(CONFIG.weather.stormFogColor);
 scene.fog = new THREE.FogExp2(FOG_COLOR.clone(), CONFIG.weather.presets.clear.fog);
 scene.background = FOG_COLOR.clone();
-const camera = new THREE.PerspectiveCamera(CONFIG.camera.fov, innerWidth / innerHeight, 0.1, 900);
+const camera = new THREE.PerspectiveCamera(CONFIG.camera.fov, innerWidth / innerHeight, 0.2, 900);
 
 // moonlight
 const hemi = new THREE.HemisphereLight(0x4a66b8, 0x2a2232, 0.66); scene.add(hemi);
 const moon = new THREE.DirectionalLight(0x9ab6ff, 0.9);
 moon.castShadow = Q.shadows; moon.shadow.mapSize.set(Q.shadowMapSize, Q.shadowMapSize);
-Object.assign(moon.shadow.camera, { left: -45, right: 45, top: 45, bottom: -45, near: 1, far: 200 });
+{ const S = CONFIG.performance.shadowFrustum; Object.assign(moon.shadow.camera, { left: -S, right: S, top: S, bottom: -S, near: 1, far: 160 }); }
 moon.shadow.bias = -0.0004; moon.shadow.normalBias = 0.035; moon.shadow.radius = Q.shadowMapSize >= 4096 ? 4 : 3; moon.shadow.blurSamples = 16;
 scene.add(moon, moon.target);
 
@@ -55,32 +74,45 @@ const post = new PostFX(renderer, scene, camera, Q, CONFIG.bloom, LOOK);
 const bloom = post.bloom;
 post.weatherPost = CONFIG.weather.post;
 if (!Q.grade) document.body.classList.add('cssVignette');
-addEventListener('resize', () => {
-  camera.aspect = innerWidth / innerHeight; camera.updateProjectionMatrix();
-  renderer.setSize(innerWidth, innerHeight); post.setSize(innerWidth, innerHeight);
-});
+let _sizeKey = '';
+function applySize(force = false) {
+  const [w, h] = viewSize(), pr = pixelRatioFor(w, h), key = `${w}x${h}@${pr.toFixed(3)}`;
+  if (!force && key === _sizeKey) return; _sizeKey = key;
+  camera.aspect = w / h; camera.updateProjectionMatrix();
+  renderer.setPixelRatio(pr); renderer.setSize(w, h); post.setSize(w, h);
+  document.documentElement.style.setProperty('--vh', h + 'px');
+}
+addEventListener('resize', () => applySize());
+addEventListener('orientationchange', () => { applySize(); setTimeout(() => applySize(true), 350); setTimeout(() => applySize(true), 900); });
+window.visualViewport?.addEventListener('resize', () => applySize());
+document.addEventListener('fullscreenchange', () => setTimeout(() => applySize(true), 100));
+// WebGL context loss (iOS backgrounding / GPU reset): stop, tell the player, reload on restore
+canvas.addEventListener('webglcontextlost', e => { e.preventDefault(); G.contextLost = true; const d = document.createElement('div'); d.id = 'ctxLost'; d.textContent = 'Graphics were reset by the device - tap to reload'; d.onclick = () => location.reload(); document.body.appendChild(d); }, false);
+canvas.addEventListener('webglcontextrestored', () => location.reload(), false);
 // runtime fallback for weak devices (only when quality = auto)
-const governor = new Governor(!Q.auto ? [] : [
+const governor = new Governor(!Q.auto || QA_FIXED_EARLY ? [] : [
   { name: 'mascot fur shells + flame light off', apply: () => santa?.lowFx?.() },
   { name: 'DOF off', apply: () => post.setDof(false) },
   { name: 'GTAO off', apply: () => post.setAO(false) },
   { name: 'light shafts + smoke off', apply: () => { if (fxs.cones) fxs.cones.mesh.visible = false; if (fxs.smoke) fxs.smoke.points.visible = false; } },
-  { name: 'render scale 1.0', apply: () => { renderer.setPixelRatio(1); post.setSize(innerWidth, innerHeight); } },
+  { name: 'render scale floor 0.5', apply: () => { PERF.minScale = Math.min(PERF.minScale, 0.5); } },
   { name: 'shadows off', apply: () => { renderer.shadowMap.enabled = false; moon.castShadow = false; scene.traverse(o => { if (o.material) [].concat(o.material).forEach(m => m.needsUpdate = true); }); } },
   { name: 'bloom off', apply: () => post.setBloom(false) },
-  { name: 'render scale 0.75', apply: () => { renderer.setPixelRatio(0.75); post.setSize(innerWidth, innerHeight); } },
-]);
+
+], { minFps: Math.round(PERF.targetFps * 0.75), window: 3, warmup: 5 });
 const fxs = {};
 
 // ------------------------------------------------------------ globals
-let world, santa, input, hud, snow, particles, fireworksParticles, flights, fireworks, giftLight, giftHalo, shardOrbit, boostTrail;
+let nav, pines, world, santa, input, hud, snow, particles, fireworksParticles, flights, fireworks, giftLight, giftHalo, shardOrbit, boostTrail, interiors;
 const G = {
   state: 'loading', level: 0, timer: 0, score: 0, levelStartScore: 0, levelTime: 0, total: 0, delivered: 0,
   targets: [], powerups: [], ice: [], mumpLeft: 0, mumpDur: 1, pulseT: 0, storm: 0, bonusFlash: 0,
   gossipBusy: false, hint: '', endingT: 0, lastTick: 0, levelObjects: [],
   combo: 0, bestCombo: 0, lastDeliverT: -1e9, boosted: 0, totalBoosted: 0,
 };
-const player = { pos: new THREE.Vector3(), vel: new THREE.Vector3(), heading: 0, speed: 0 };
+import { Nav } from './nav.js';
+const _dbs = new THREE.Vector2();
+const player = { pos: new THREE.Vector3(), vel: new THREE.Vector3(), heading: 0, speed: 0, jy: 0, vy: 0, air: false, coyote: 0, jumpBuf: 0, sprintK: 0, holdT: 0, surfY: 0, paved: false };
 const cam = { yaw: 0, pos: new THREE.Vector3(), look: new THREE.Vector3(), dist: CONFIG.camera.distance };
 const perf = { frames: [], last: performance.now() };
 
@@ -97,6 +129,14 @@ async function boot() {
   await initAssets(renderer);
   if (Q.env) await loadEnvironment(renderer, scene, LOOK.hdri, LOOK.envIntensity);
   world = new World(scene, Q);
+  { // needle-card pines (street + forest), impostor LOD beyond nearRange
+    const T = (world.pineTrees || []).map(t => ({ ...t, y: (world.heightAt ? world.heightAt(t.x, t.z) : 0) - 0.12 }));
+    pines = new PineSystem(scene, renderer, T, { variants: 2, nearRange: PERF.pineNearRange * (Q.name === 'low' ? 0.6 : 1), msaa: Q.msaa, shadows: Q.shadows });
+    pines.update(camera.position, 0, true);
+    if (DEBUG || params.get('qa')) world.floatingDecor(T.map(t => ({ kind: t.mini ? 'miniTree' : 'pine', x: t.x, y: t.y, z: t.z })));
+    if (DEBUG) setTimeout(() => { try { world.decorGaps(0.03, 10); } catch (e) { console.warn('[decor] audit failed', e); } }, 1500);
+  }
+  if (CONFIG.interiors?.enabled !== false) { try { interiors = new Interiors(world, scene, Q.name, CONFIG.interiors); } catch (e) { console.warn('[interiors] disabled:', e); } }
   santa = createSanta(Q.name); scene.add(santa.root);
   santa.root.traverse(o => { if (o.isMesh && !o.name.startsWith('mascot')) o.castShadow = true; });
   giftLight = new THREE.PointLight(0x3f9dff, 5, 9, 2); scene.add(giftLight);
@@ -105,6 +145,7 @@ async function boot() {
   giftHalo.scale.setScalar(1.6); giftHalo.renderOrder = 5; scene.add(giftHalo);
   input = new Input(canvas); input.onPause = togglePause;
   hud = new HUD(world);
+  nav = new Nav(scene);
   // layered snow: main fall, far fine dust, near soft "bokeh" flakes
   snow = new Snow(scene, Q.snowCount);
   fxs.snowLayers = [];
@@ -114,6 +155,14 @@ async function boot() {
   if (Q.smoke) { const src = world.buildings.filter(b => b.chimney).map(b => b.chimney); if (src.length) fxs.smoke = new ChimneySmoke(scene, src, Q.name === 'high' ? 24 : 16); }
   if (Q.footprints) fxs.feet = new Footprints(scene, 240);
   if (fxs.feet) fxs.feet.heightAt = world.heightAt;
+  fxs.puffs = new SnowPuffs(scene, Q.name === 'low' ? 160 : 400);
+  santa.onStep = (wp, side, k) => { // a boot planted: crunch/tap sound, print + kick-up on snow only
+    if (player.air || G.state !== 'playing') return;
+    sfx.step(k, player.paved || G.onIce ? 'stone' : 'snow');
+    if (player.paved || G.onIce) return;
+    fxs.feet?.stamp(wp.x, wp.z, player.heading, fxs.feet.uniforms.uTime.value, player.surfY - 0.01);
+    if (CONFIG.character.grounding.stepPuffs) fxs.puffs.kick(wp.x, player.surfY + 0.03, wp.z, Math.sin(player.heading), Math.cos(player.heading), 4 + Math.round(k * 5), 0.6 + k * 0.6);
+  };
   if (Q.sparkle) fxs.sparkles = new Sparkles(scene, Q.name === 'high' ? 1800 : 1000);
   fxs.waves = new Shockwaves(scene);
   particles = new Particles(scene, 2500, 0.35);
@@ -121,6 +170,7 @@ async function boot() {
   flights = new Flights(scene, particles);
   flights.onImpact = (p) => fxs.waves.spawn(p.clone().setY(0), 3.2, 0.55, 0x6fd0ff);
   fireworks = new Fireworks(scene, fireworksParticles);
+  fireworks.onLaunch = r => sfx.firework(r.logo ? 1 : 0.45 + Math.random() * 0.3, r.fuse);
   shardOrbit = makeShardOrbit(); scene.add(shardOrbit);
   boostTrail = makeBoostTrail(); scene.add(boostTrail.mesh);
 
@@ -147,15 +197,16 @@ function bindUI() {
     startLevel(lv);
   };
   $('pauseBtn').onclick = togglePause;
+  bindAudioUI(); bindScreenUI();
   $('endBtn').onclick = () => { $('ending').classList.add('hidden'); G.score = 0; G.totalBoosted = 0; hud.displayScore = 0; resetVillageLights(); startLevel(0); };
   if (params.get('autostart')) setTimeout(() => $('playBtn').click(), 50);
 }
 
 function togglePause() {
-  if (G.state === 'playing') { G.state = 'paused'; showOverlay('Paused', 'Take a breath — the slot is frozen.', null, 'Resume', () => { hideOverlay(); G.state = 'playing'; }, 'Quit to title', () => { hideOverlay(); toTitle(); }); }
+  if (G.state === 'playing') { G.state = 'paused'; showOverlay('Paused', 'Take a breath — the slot is frozen.' + AUDIO_SLIDERS, null, 'Resume', () => { hideOverlay(); G.state = 'playing'; }, 'Quit to title', () => { hideOverlay(); toTitle(); }); }
   else if (G.state === 'paused') { hideOverlay(); G.state = 'playing'; }
 }
-function toTitle() { clearLevel(); resetVillageLights(); G.state = 'title'; hud.show(false); $('touchUI').classList.add('hidden'); $('title').classList.remove('hidden'); }
+function toTitle() { music.play('title'); clearLevel(); resetVillageLights(); G.state = 'title'; hud.show(false); $('touchUI').classList.add('hidden'); $('title').classList.remove('hidden'); }
 
 function showOverlay(title, text, stats, btn, fn, btn2, fn2) {
   $('ovTitle').textContent = title; $('ovText').innerHTML = text;
@@ -164,6 +215,48 @@ function showOverlay(title, text, stats, btn, fn, btn2, fn2) {
   $('ovBtn').textContent = btn; $('ovBtn').onclick = fn;
   $('ovBtn2').classList.toggle('hidden', !btn2); if (btn2) { $('ovBtn2').textContent = btn2; $('ovBtn2').onclick = fn2; }
   $('overlay').classList.remove('hidden');
+  bindPauseSliders();
+}
+const AUDIO_SLIDERS = `<div id="pauseAudio"><label for="volMusic">Music</label><input id="volMusic" type="range" min="0" max="1" step="0.05"><label for="volSfx">Sound FX</label><input id="volSfx" type="range" min="0" max="1" step="0.05"><label for="volMute">Mute</label><input id="volMute" type="checkbox" style="justify-self:start"></div>`;
+function bindPauseSliders() {
+  const a = audioState.get(), m = $('volMusic'), f = $('volSfx'), u = $('volMute'); if (!m) return;
+  m.value = a.music; f.value = a.sfx; u.checked = a.muted;
+  m.oninput = () => audioState.setMusic(m.value); f.oninput = () => audioState.setSfx(f.value); u.onchange = () => audioState.setMuted(u.checked);
+}
+function bindAudioUI() {
+  configureAudio(CONFIG.audio);
+  // browsers only allow audio after a gesture: start the context + title music on the first one
+  const first = () => { if (CONFIG.audio?.enabled === false || G.qaMute) return; initAudio(CONFIG.audio); if (!music.current) music.play(G.state === 'title' ? 'title' : G.state === 'ending' ? 'ending' : 'game'); removeEventListener('pointerdown', first, true); removeEventListener('keydown', first, true); };
+  addEventListener('pointerdown', first, true); addEventListener('keydown', first, true);
+  addEventListener('keydown', e => { if (e.code === 'KeyM' && !e.repeat) { audioState.toggleMute(); bindPauseSliders(); } });
+  $('muteBtn').onclick = e => { e.stopPropagation(); audioState.toggleMute(); bindPauseSliders(); };
+  audioState.onChange(a => { $('muteBtn').textContent = a.muted ? '🔇' : '🔊'; $('muteBtn').classList.toggle('off', a.muted); });
+}
+// fullscreen button (where the Fullscreen API exists — not iPhone Safari), one-time iOS "Add to Home Screen" tip, portrait rotate hint
+function bindScreenUI() {
+  const standalone = matchMedia('(display-mode: fullscreen)').matches || matchMedia('(display-mode: standalone)').matches || navigator.standalone === true;
+  const iOS = /iP(hone|od|ad)/.test(navigator.userAgent) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
+  const el = document.documentElement, req = el.requestFullscreen || el.webkitRequestFullscreen;
+  const fsOK = !!req && (document.fullscreenEnabled || document.webkitFullscreenEnabled) && !standalone && !(iOS && /iPhone|iPod/.test(navigator.userAgent));
+  const isFs = () => !!(document.fullscreenElement || document.webkitFullscreenElement);
+  const toggleFs = async () => {
+    try {
+      if (isFs()) await (document.exitFullscreen || document.webkitExitFullscreen).call(document);
+      else { await req.call(el, { navigationUI: 'hide' }); try { await screen.orientation?.lock?.('landscape'); } catch (e) { /* not supported */ } }
+    } catch (e) { console.info('[fullscreen] not available', e?.message); }
+  };
+  for (const id of ['fsBtn', 'fsBtnTitle']) { $(id).classList.toggle('hidden', !fsOK); $(id).onclick = e => { e.stopPropagation(); toggleFs(); }; }
+  const upd = () => { $('fsBtn').textContent = isFs() ? '🗗' : '⛶'; };
+  document.addEventListener('fullscreenchange', upd); document.addEventListener('webkitfullscreenchange', upd);
+  if (iOS && !standalone && !localStorage.getItem('xmas.iosTip')) {
+    setTimeout(() => $('iosTip').classList.remove('hidden'), 1200);
+    $('iosTipX').onclick = () => { $('iosTip').classList.add('hidden'); localStorage.setItem('xmas.iosTip', '1'); };
+    setTimeout(() => { $('iosTip').classList.add('hidden'); localStorage.setItem('xmas.iosTip', '1'); }, 14000);
+  }
+  let portraitOK = sessionStorage.getItem('xmas.portrait') === '1';
+  const rot = () => { const show = isTouch && !portraitOK && innerHeight > innerWidth * 1.15; $('rotateHint').classList.toggle('hidden', !show); };
+  $('rotateX').onclick = () => { portraitOK = true; sessionStorage.setItem('xmas.portrait', '1'); rot(); };
+  addEventListener('resize', rot); addEventListener('orientationchange', () => setTimeout(rot, 300)); rot();
 }
 function hideOverlay() { $('overlay').classList.add('hidden'); }
 
@@ -198,6 +291,7 @@ function resetVillageLights() {
 }
 
 function startLevel(idx) {
+  music.play('game');
   clearLevel(); resetVillageLights();
   const L = CONFIG.levels[idx], D = difficulty();
   G.level = idx; G.levelTime = 0; G.levelStartScore = G.score;
@@ -260,6 +354,13 @@ const ringShader = (color) => new THREE.ShaderMaterial({
   vertexShader: 'varying vec3 vP; void main(){ vP = position; gl_Position = projectionMatrix*modelViewMatrix*vec4(position,1.0); }',
   fragmentShader: 'varying vec3 vP; uniform float uP; uniform vec3 uC; void main(){ float a = atan(vP.x, -vP.y)/6.2831853+0.5; if (a > uP) discard; gl_FragColor = vec4(uC*2.2, 0.95); }',
 });
+const beaconShader = (hex) => new THREE.ShaderMaterial({
+  transparent: true, depthWrite: false, blending: THREE.AdditiveBlending, side: THREE.DoubleSide, fog: false,
+  uniforms: { uC: { value: new THREE.Color(hex) }, uT: beamMat.uniforms.uT },
+  vertexShader: 'varying vec2 vUv; varying float vD; void main(){ vUv = uv; vec4 mv = modelViewMatrix*vec4(position,1.0); vD = -mv.z; gl_Position = projectionMatrix*mv; }',
+  fragmentShader: 'varying vec2 vUv; varying float vD; uniform vec3 uC; uniform float uT; void main(){ float a = pow(1.0-vUv.y, 1.4)*smoothstep(0.0, 0.06, vUv.y)*(0.85+0.15*sin(uT*2.0-vUv.y*30.0)) * mix(0.14, 0.6, smoothstep(12.0, 80.0, vD)); gl_FragColor = vec4(uC*1.4, a); }',
+});
+const beaconMat = beaconShader(0x3fb6ff), beaconMatSlow = beaconShader(0xffa63a);
 let slowTex = null;
 
 function makeTarget(b, slow) {
@@ -281,13 +382,20 @@ function makeTarget(b, slow) {
   const glow = new THREE.Mesh(new THREE.PlaneGeometry(1, 1), new THREE.MeshBasicMaterial({ map: glowTexture(), color: 0x2f8fff, transparent: true, opacity: 0.32, depthWrite: false, blending: THREE.AdditiveBlending }));
   glow.rotation.x = -Math.PI / 2; glow.position.set(b.x, 0.1, b.z); glow.scale.set(b.footprint[0] * 2.6, b.footprint[1] * 2.6, 1);
   g.add(gem, beam, ring, prog, glow);
+  // tall sky beacon above the roof: fog-free, fades in with distance so it marks the house through fog/storm
+  let beacon = null;
+  if (CONFIG.nav?.beacons !== false) {
+    const H = CONFIG.nav?.beaconHeight ?? 70;
+    beacon = new THREE.Mesh(new THREE.CylinderGeometry(0.45, 0.7, H, 12, 1, true), slow ? beaconMatSlow : beaconMat);
+    beacon.position.set(b.x, b.height + 2 + H / 2, b.z); beacon.renderOrder = 2; g.add(beacon);
+  }
   if (slow) {
     slowTex ??= textTexture('SLOW NODE', { w: 512, h: 128, bg: 'rgba(40,20,0,0.75)', fg: '#ffcf6b', border: '#ff9f2e', glow: '#ff9f2e', font: 'bold 70px system-ui, sans-serif' });
     const label = new THREE.Sprite(new THREE.SpriteMaterial({ map: slowTex, transparent: true, depthWrite: false }));
     label.scale.set(5, 1.25, 1); label.position.set(b.x, b.height + 6.2, b.z); g.add(label);
   }
   scene.add(g); G.levelObjects.push(g);
-  return { b, slow, delivered: false, sending: false, progress: 0, group: g, gem, halo, prog, ring, glow, beam, fadeT: -1 };
+  return { b, slow, delivered: false, sending: false, progress: 0, group: g, gem, halo, prog, ring, glow, beam, beacon, fadeT: -1 };
 }
 
 function spawnPowerup(R, L) {
@@ -318,12 +426,37 @@ function onIce(x, z) {
   return false;
 }
 
+let blob = null;
+function updateBlob() { // soft contact shadow under the feet (fades/shrinks with jump height)
+  if (!blob) {
+    const cv = document.createElement('canvas'); cv.width = cv.height = 128; const g = cv.getContext('2d');
+    const gr = g.createRadialGradient(64, 64, 4, 64, 64, 62); gr.addColorStop(0, 'rgba(0,0,0,1)'); gr.addColorStop(0.45, 'rgba(0,0,0,0.6)'); gr.addColorStop(1, 'rgba(0,0,0,0)');
+    g.fillStyle = gr; g.fillRect(0, 0, 128, 128);
+    blob = new THREE.Mesh(new THREE.PlaneGeometry(1.5, 1.5).rotateX(-Math.PI / 2), new THREE.MeshBasicMaterial({ map: new THREE.CanvasTexture(cv), transparent: true, depthWrite: false, opacity: 0.4, polygonOffset: true, polygonOffsetFactor: -6, polygonOffsetUnits: -8, fog: true }));
+    blob.renderOrder = 1; blob.userData.noAO = true; scene.add(blob);
+  }
+  const k = 1 / (1 + player.jy * 0.9);
+  blob.position.set(player.pos.x, player.surfY + 0.012, player.pos.z); blob.scale.setScalar(0.75 + 0.25 * k);
+  blob.material.opacity = (CONFIG.character.grounding.blobShadow ?? 0.4) * k; blob.visible = santa.root.visible !== false;
+}
+function onLand(impact) { // landing: snow puff ring + small camera dip
+  if (!player.paved && !G.onIce) fxs.puffs?.ring(player.pos.x, player.surfY + 0.05, player.pos.z, 0.25 + impact * 0.5, 14 + Math.round(impact * 20));
+  cam.kick = Math.max(cam.kick || 0, impact * 0.25);
+}
+
 function updatePlayer(dt) {
   const P = CONFIG.player, D = difficulty();
-  const ax = input.axes(), sprint = input.sprint;
+  const ax = input.axes(), J = P.jump, AS = P.autoSprint;
+  // sprint: Shift (desktop) or touch auto-sprint (joystick pushed past radiusFrac, or a direction held holdTime s); smooth ramp
+  const mag = Math.hypot(ax.x, ax.y);
+  player.holdT = mag > 0.35 ? player.holdT + dt : 0;
+  const wantSprint = input.sprint || (input.joy.active && (mag >= AS.radiusFrac || player.holdT >= AS.holdTime)) || (AS.keyboardHold && player.holdT >= AS.holdTime);
+  player.sprintK = THREE.MathUtils.clamp(player.sprintK + (wantSprint ? dt : -dt * 2) / AS.rampTime, 0, 1);
+  const sprint = player.sprintK > 0.5;
   const fx = Math.sin(cam.yaw), fz = Math.cos(cam.yaw); // camera forward
   const rx = -fz, rz = fx; // camera right
-  const speedMax = (sprint ? P.sprintSpeed : P.walkSpeed) * D.speedMult;
+  const sk = player.sprintK * player.sprintK * (3 - 2 * player.sprintK);
+  const speedMax = lerp(P.walkSpeed, P.sprintSpeed, sk) * D.speedMult;
   const wantX = (fx * ax.y + rx * ax.x) * speedMax, wantZ = (fz * ax.y + rz * ax.x) * speedMax;
   const ice = onIce(player.pos.x, player.pos.z);
   const hasInput = Math.hypot(ax.x, ax.y) > 0.05;
@@ -334,7 +467,20 @@ function updatePlayer(dt) {
   if (!ice && !hasInput) { player.vel.multiplyScalar(Math.exp(-14 * dt)); }
   const before = player.pos.clone();
   player.pos.x += player.vel.x * dt; player.pos.z += player.vel.z * dt;
-  world.collide(player.pos, P.radius);
+  // vertical: real jump arc with gravity, coyote time and input buffering
+  const jumpKey = input.keys.has('Space') || input.jumpBtn;
+  if (jumpKey && !G.jumpHeld) player.jumpBuf = J.bufferTime; G.jumpHeld = jumpKey;
+  player.jumpBuf = Math.max(0, player.jumpBuf - dt);
+  player.coyote = player.air ? Math.max(0, player.coyote - dt) : J.coyoteTime;
+  if (player.jumpBuf > 0 && player.coyote > 0 && !G.slowHold) {
+    player.vy = J.velocity; player.air = true; player.coyote = 0; player.jumpBuf = 0;
+    santa.jumpStart?.(); sfx.jump?.();
+  }
+  if (player.air) {
+    player.vy -= J.gravity * dt; player.jy += player.vy * dt;
+    if (player.jy <= 0) { const impact = Math.min(1, -player.vy / 9); player.jy = 0; player.vy = 0; player.air = false; santa.land?.(impact); onLand(impact); }
+  }
+  world.collide(player.pos, P.radius, player.jy);
   // velocity follows actual displacement (so walls stop sliding momentum)
   if (dt > 0) { const ax2 = (player.pos.x - before.x) / dt, az2 = (player.pos.z - before.z) / dt; player.vel.x = lerp(player.vel.x, ax2, 0.5); player.vel.z = lerp(player.vel.z, az2, 0.5); }
   player.speed = Math.hypot(player.vel.x, player.vel.z);
@@ -342,12 +488,15 @@ function updatePlayer(dt) {
     const dir = ice ? Math.atan2(wantX, wantZ) : Math.atan2(player.vel.x, player.vel.z);
     player.heading = angleDamp(player.heading, dir, P.turnSpeed, dt);
   }
-  santa.root.position.copy(player.pos); santa.root.position.y = world.heightAt ? world.heightAt(player.pos.x, player.pos.z) * 0.85 : 0; // boots sink a little into the snow
+  // grounding: stand on the real walkable surface (road / square / snow), sinking slightly into snow
+  const surf = world.surfaceAt(player.pos.x, player.pos.z), GR = CONFIG.character.grounding;
+  player.surfY = surf.y; player.paved = surf.paved;
+  santa.root.position.copy(player.pos); santa.root.position.y = surf.y - (surf.paved || ice ? 0 : GR.snowSink);
+  santa.extY = player.jy; santa.extAir = player.air; if (!santa.isMascot) santa.root.position.y += player.jy;
+  updateBlob();
   santa.root.rotation.y = player.heading;
   santa.root.rotation.z = ice ? Math.sin(G.levelTime * 9) * 0.05 * Math.min(1, player.speed / 4) : 0;
   santa.setState?.({ storm: G.storm, ice, slow: G.slowHold, boosted: G.mumpLeft > 0 });
-  const jumpKey = input.keys.has('Space') || input.jumpBtn;
-  if (jumpKey && !G.jumpHeld) santa.jump?.(); G.jumpHeld = jumpKey;
   santa.update(dt, player.speed, sprint && player.speed > P.walkSpeed * 0.9);
   G.onIce = ice;
 }
@@ -356,7 +505,12 @@ function setFov(f, dt) { const n = camera.fov + (f - camera.fov) * (1 - Math.exp
 function updateCamera(dt, t) {
   const C = CONFIG.camera;
   if (G.camOverride) { // QA / photo mode
-    const o = G.camOverride; camera.position.set(...o.pos); camera.lookAt(...o.look); cam.pos.copy(camera.position); cam.look.set(...o.look);
+    const o = G.camOverride;
+    if (o.rel) { // offsets in the player's frame: [side, up, forward] — follows the player (QA walk close-ups)
+      const h = player.heading, fx = Math.sin(h), fz = Math.cos(h), sx = Math.cos(h), sz = -Math.sin(h), P = player.pos;
+      const W = (v) => [P.x + sx * v[0] + fx * v[2], P.y + v[1], P.z + sz * v[0] + fz * v[2]];
+      const lp = W(o.look); camera.position.set(...W(o.pos)); camera.lookAt(...lp); cam.pos.copy(camera.position); cam.look.set(...lp);
+    } else { camera.position.set(...o.pos); camera.lookAt(...o.look); cam.pos.copy(camera.position); cam.look.set(...o.look); }
     if (o.fov && camera.fov !== o.fov) { camera.fov = o.fov; camera.updateProjectionMatrix(); }
     return;
   }
@@ -538,7 +692,7 @@ function updateTargets(dt, t) {
   for (const tg of G.targets) {
     if (tg.fadeT >= 0) {
       tg.fadeT -= dt; const s = Math.max(0, tg.fadeT / 0.6);
-      tg.gem.scale.set(s, s * 1.5, s); tg.beam.visible = false; tg.ring.visible = false; tg.prog.visible = false; tg.halo.material.opacity = s;
+      tg.gem.scale.set(s, s * 1.5, s); tg.beam.visible = false; if (tg.beacon) tg.beacon.visible = false; tg.ring.visible = false; tg.prog.visible = false; tg.halo.material.opacity = s;
       tg.group.children.forEach(c => { if (c.isSprite) c.visible = false; });
       if (tg.fadeT < 0) { tg.gem.visible = false; tg.glow.material.opacity = 0.75; }
       continue;
@@ -632,7 +786,7 @@ function updateLightPool() {
 
 function levelComplete() {
   if (G.state !== 'playing') return;
-  G.state = 'levelComplete'; sfx.jingle();
+  G.state = 'levelComplete'; music.stop(); sfx.jingle();
   const last = G.level >= CONFIG.levels.length - 1;
   if (last) { startEnding(); return; }
   const timeLeft = Math.max(0, G.timer);
@@ -642,13 +796,14 @@ function levelComplete() {
 }
 
 function gameOver() {
-  G.state = 'gameOver'; sfx.fail();
+  G.state = 'gameOver'; music.stop(); sfx.fail();
   showOverlay('Slot missed!', `The block didn't reach every validator in time.<br>${G.total - G.delivered} validator${G.total - G.delivered === 1 ? '' : 's'} still waiting.`,
     [['Staked ETH', formatEth(G.score)], [X.resultsLabel, `${G.boosted}/${G.total}`], ['Level', `${G.level + 1}`]],
     'Retry level', () => { G.score = G.levelStartScore; hud.displayScore = G.score; startLevel(G.level); }, 'Title', () => { hideOverlay(); G.score = 0; hud.displayScore = 0; toTitle(); });
 }
 
 function startEnding() {
+  music.play('ending');
   G.state = 'ending'; G.endingT = 0; G.finalScore = G.score; hud.displayScore = G.score;
   clearLevel();
   // blue wave outward from the tree
@@ -670,9 +825,33 @@ let lightT = 0, t = 0;
 // ?qa=1: fixed 1/30 s per frame so slow software-GL screenshots are deterministic; advance() steps the sim without rendering
 const QA_FIXED = !!params.get('qa');
 let simOnly = false;
+// dynamic resolution: frame-time EMA -> render scale (auto quality only, never in QA); the feature governor
+// only kicks in once the scale is already at its floor
+const dyn = { ema: 1000 / 60, acc: 0, good: 0, on: PERF.dynamicResolution && Q.auto && !QA_FIXED_EARLY };
+function perfCtl(d) {
+  const ms = d * 1000; if (ms <= 0 || ms > 250) return;
+  dyn.ema += (ms - dyn.ema) * 0.08; dyn.acc += d;
+  if (!dyn.on || dyn.acc < 1) return; dyn.acc = 0;
+  const budget = 1000 / PERF.targetFps;
+  if (dyn.ema > budget * 1.1 && dynScale > PERF.minScale) { dynScale = Math.max(PERF.minScale, dynScale - (dyn.ema > budget * 1.6 ? 0.15 : 0.07)); dyn.good = 0; applySize(); }
+  else if (dyn.ema < budget * 0.82) { if (++dyn.good >= 3 && dynScale < PERF.maxScale) { dynScale = Math.min(PERF.maxScale, dynScale + 0.05); dyn.good = 0; applySize(); } }
+  else dyn.good = 0;
+}
+// ?debug=1 overlay: fps / frame ms / draw calls / triangles / render scale / governor steps
+let dbgEl = null, dbgT = 0;
+function debugOverlay(d) {
+  if (!DEBUG) return;
+  if (!dbgEl) { dbgEl = document.createElement('div'); dbgEl.id = 'dbgFps'; document.body.appendChild(dbgEl); renderer.info.autoReset = false; }
+  dbgT += d; if (dbgT < 0.5) { renderer.info.reset(); return; } dbgT = 0;
+  const I = renderer.info.render, sz = renderer.getDrawingBufferSize(new THREE.Vector2());
+  dbgEl.textContent = `${(1000 / dyn.ema).toFixed(0)} fps · ${dyn.ema.toFixed(1)} ms\n${I.calls} calls · ${(I.triangles / 1e6).toFixed(2)}M tris\n${Q.name}${Q.auto ? ' (auto)' : ''} · scale ${dynScale.toFixed(2)} · ${sz.x}x${sz.y}\n${governor.applied.join(', ') || 'no fallbacks'}`;
+  renderer.info.reset();
+}
 function loop() {
   requestAnimationFrame(loop);
+  if (G.contextLost) return;
   const d = clock.getDelta();
+  perfCtl(d); debugOverlay(d);
   frame(QA_FIXED ? 1 / 30 : Math.min(0.05, d));
 }
 function frame(dt) {
@@ -689,6 +868,10 @@ function frame(dt) {
     updateTargets(dt, t);
     updateStorm(dt);
     world.update(dt, t);
+    interiors?.update(t);
+    if (world.bulbMat) { const u = world.bulbMat.uniforms; u.uTime.value = t; u.uFog.value = scene.fog?.density ?? 0;
+      u.uPx.value = renderer.getDrawingBufferSize(_dbs).y / (2 * Math.tan(THREE.MathUtils.degToRad(camera.fov) / 2)); }
+    pines?.update(camera.position, dt);
     flights.update(dt);
     particles.update(dt);
     fireworks.update(dt, G.state === 'ending');
@@ -718,11 +901,13 @@ function frame(dt) {
     hud.combo(left > 0 && G.state === 'playing' ? G.combo : 0, comboMult(G.combo), Math.max(0, left / X.comboWindow));
     hud.drawMinimap({ player: player.pos, heading: player.heading, camYaw: cam.yaw, targets: G.targets, powerups: G.powerups, ice: G.ice, areaRadius: CONFIG.levels[G.level].areaRadius, mump: G.mumpLeft > 0 });
   }
+  nav?.update(dt, t, { player: { x: player.pos.x, y: player.surfY || 0, z: player.pos.z }, targets: G.targets, camera, playing: G.state === 'playing' });
   // --- FX layer
   const camDist = camera.position.distanceTo(santa.root.position);
   fxs.cones?.update(dt, t, G.storm);
   fxs.smoke?.update(t, G.storm, renderer.domElement.height, camera.fov);
-  fxs.feet?.update(t, player.pos, player.heading, playing && !G.onIce && player.speed > 0.3);
+  fxs.feet?.update(t, player.pos, player.heading, !santa.stepEvents && playing && !G.onIce && !player.paved && player.speed > 0.3);
+  fxs.puffs?.update(dt, renderer.domElement.height / (2 * Math.tan(THREE.MathUtils.degToRad(camera.fov / 2))));
   fxs.sparkles?.update(t, player.pos);
   fxs.waves.update(dt);
   for (const L of fxs.snowLayers) L.s.update(t, L.near ? camera.position : _v0.set(camera.position.x, 0, camera.position.z), G.storm, G.weather);
@@ -731,16 +916,23 @@ function frame(dt) {
   post.update(t, { focus: dofFocus, boost: G.mumpLeft > 0 ? 0.6 + 0.4 * Math.sin(t * 4) : 0, flash: G.flash, storm: G.storm });
   if (simOnly) return;
   post.render();
-  governor.tick(dt, G.state === 'playing' || G.state === 'title');
+  music.setBoost(G.state === 'playing' && G.mumpLeft > 0); sfx.wind(G.state === 'playing' || G.state === 'paused' ? (G.storm || 0) : 0.15);
+  governor.tick(dt, (G.state === 'playing' || G.state === 'title') && (!dyn.on || dynScale <= PERF.minScale + 1e-3));
+  post.setCinematic(G.state === 'title' || G.state === 'levelComplete' || G.state === 'ending' || G.state === 'intro');
   // perf stats
   const now = performance.now(); perf.frames.push(now - perf.last); perf.last = now; if (perf.frames.length > 240) perf.frames.shift();
 }
 
 function debugAPI() {
   return {
-    G, player, CONFIG, renderer, world, santa, scene, camera, post,
+    G, player, CONFIG, renderer, world, santa, scene, camera, post, get hud() { return hud; }, get nav() { return nav; },
     get state() { return G.state; },
-    start: (lv = 0) => { initAudio(false); startLevel(lv); },
+    resolveWindows: async (rects) => { const { resolveWindows } = await import('./interiors.js'); const out = {}; for (const b of world.buildings) { if (!b.isGLB || out[b.type] || !rects[b.type]) continue; out[b.type] = resolveWindows(b.holder.children[0], b.holder, rects[b.type]); } return out; },
+    facadeShots: async (side = 0, mask = false) => { const { facadeShot } = await import('./interiors.js'); const out = {}; for (const b of world.buildings) { if (!b.isGLB || out[b.type]) continue; out[b.type] = facadeShot(b.holder.children[0], b.holder, renderer, side, 48, mask); } return out; },
+    // dev: detect lit window rects on each Tripo building type (output -> assets/windows.js)
+    detectWindows: async () => { const { detectWindows } = await import('./interiors.js'); const out = {}; for (const b of world.buildings) { if (!b.isGLB || out[b.type]) continue; const o = b.holder.children[0]; out[b.type] = detectWindows(o, b.holder, renderer); } return out; },
+    start: (lv = 0) => { G.qaMute = true; initAudio(false); startLevel(lv); },
+    input, player, G,
     completeLevel: () => { for (const tg of G.targets) deliver(tg); },
     deliverSome: (n) => { G.targets.filter(t => !t.delivered).slice(0, n).forEach(deliver); },
     givePowerup: () => { const p = G.powerups.find(p => p.active) || G.powerups[0]; pickPowerup(p); },
@@ -751,10 +943,39 @@ function debugAPI() {
     setStorm: (v) => { G.stormForce = v == null ? null : +v; },
     weather: () => ({ preset: CONFIG.levels[G.level]?.weather, storm: +G.storm.toFixed(3), ...Object.fromEntries(Object.entries(G.weather || {}).map(([k, v]) => [k, +v.toFixed(4)])) }),
     fps: () => { const f = perf.frames; const avg = f.reduce((a, b) => a + b, 0) / Math.max(1, f.length); return { avgFrameMs: +avg.toFixed(2), fps: +(1000 / avg).toFixed(1), samples: f.length }; },
-    cam: (pos, look, fov) => { G.camOverride = pos ? { pos, look, fov } : null; },
+    interiors: () => interiors && { n: interiors.windows.length, list: interiors.windows.map((w, i) => interiors.info(i)) },
+    windowInfo: i => interiors?.info(i),
+    nearSnow: v => fxs.snowLayers.forEach(L => { if (L.near) L.s.points.visible = !!v; }),
+    cam: (pos, look, fov, rel = false) => { G.camOverride = pos ? { pos, look, fov, rel } : null; },
     fx: () => ({ quality: Q, governor: governor.applied, chimneys: world.buildings.filter(b => b.chimney).length, lamps: fxs.cones?.lamps.length || 0, env: !!scene.environment }),
     santaPos: () => player.pos.toArray(),
     advance: (sec, step = 1 / 30) => { simOnly = true; try { for (let i = 0; i < Math.round(sec / step); i++) frame(step); } finally { simOnly = false; } return G.state; },
+    // one fully rendered frame, all passes (shadow + scene + post): draw calls / triangles / pixel size
+    pines: () => pines?.stats(),
+    grounding: () => santa.grounding?.(),
+    prints: () => fxs.feet ? Array.from(fxs.feet.birth).filter(b => b > -1e3).length : -1,
+    jump: () => { player.jumpBuf = CONFIG.player.jump.bufferTime; },
+    playerState: () => ({ x: +player.pos.x.toFixed(2), z: +player.pos.z.toFixed(2), jy: +player.jy.toFixed(2), air: player.air, speed: +player.speed.toFixed(2), sprintK: +player.sprintK.toFixed(2), surfY: +player.surfY.toFixed(3), paved: player.paved }),
+    decorGaps: (g, s) => world.decorGaps(g, s),
+    floatingDecor: () => world.floatingDecor(pines ? pines.trees.map(t => ({ kind: t.mini ? 'miniTree' : 'pine', x: t.x, y: t.y, z: t.z })) : []),
+    stats: () => {
+      const I = renderer.info; I.autoReset = false; I.reset(); renderer.shadowMap.needsUpdate = true; post.render(); const all = { calls: I.render.calls, triangles: I.render.triangles };
+      I.reset(); const sm = renderer.shadowMap.autoUpdate; renderer.render(scene, camera); const sc = { calls: I.render.calls, triangles: I.render.triangles }; I.autoReset = true;
+      let meshes = 0, inst = 0, lights = 0; scene.traverseVisible(o => { if (o.isMesh || o.isPoints || o.isLine) meshes++; if (o.isInstancedMesh) inst += o.count; if (o.isLight && o.intensity > 0) lights++; });
+      const sz = renderer.getDrawingBufferSize(new THREE.Vector2());
+      return { quality: Q.name, pixelRatio: renderer.getPixelRatio(), buffer: [sz.x, sz.y], shadowMap: moon.shadow.mapSize.x, shadows: renderer.shadowMap.enabled, msaa: Q.msaa, ao: !!post.ao?.enabled, dof: !!post.final?.uniforms.uDof?.value, frame: all, sceneOnly: sc, visibleObjects: meshes, instances: inst, lights, programs: I.programs?.length, textures: I.memory.textures, geometries: I.memory.geometries };
+    },
+    // triangle budget by object (visible, in-frustum), largest first
+    breakdown: (top = 25) => {
+      const fr = new THREE.Frustum().setFromProjectionMatrix(new THREE.Matrix4().multiplyMatrices(camera.projectionMatrix, camera.matrixWorldInverse)); const rows = new Map();
+      scene.updateMatrixWorld(); scene.traverseVisible(o => {
+        if (!(o.isMesh || o.isPoints) || !o.geometry) return; if (o.frustumCulled && !fr.intersectsObject(o)) return;
+        const g = o.geometry, tri = (g.index ? g.index.count : g.attributes.position.count) / 3 * (o.isPoints ? 0 : 1), n = o.isInstancedMesh ? o.count : 1;
+        let k = o.name || o.parent?.name || o.material?.name || o.type; let p = o; while (p && !p.userData?.type && p.parent) p = p.parent; if (p?.userData?.type) k = 'bld:' + p.userData.type;
+        const r = rows.get(k) || { k, objs: 0, tris: 0, inst: 0, shadow: 0 }; r.objs++; r.tris += tri * n; r.inst += n; if (o.castShadow) r.shadow += tri * n; rows.set(k, r);
+      });
+      return [...rows.values()].sort((a, b) => b.tris - a.tris).slice(0, top).map(r => [r.k, r.objs, r.inst, Math.round(r.tris), Math.round(r.shadow)]);
+    },
     info: () => ({ quality: Q.name, buildings: world.buildings.length, bulbs: world.bulbs.length, pines: world.streetPines?.length, calls: renderer.info.render.calls, triangles: renderer.info.render.triangles, geometries: renderer.info.memory.geometries, textures: renderer.info.memory.textures }),
   };
 }

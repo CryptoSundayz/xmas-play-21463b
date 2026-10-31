@@ -37,6 +37,7 @@ export class HUD {
     // roads
     g.strokeStyle = '#b7a58c'; g.lineCap = 'round'; g.lineJoin = 'round'; g.lineWidth = CONFIG.world.roadWidth * k;
     for (const r of this.world.roads) { g.beginPath(); r.pts.forEach((p, i) => i ? g.lineTo(...P(p.x, p.z)) : g.moveTo(...P(p.x, p.z))); g.stroke(); }
+    g.lineWidth = 1.6 * k; for (const q of this.world.paths || []) { g.beginPath(); g.moveTo(...P(q.x0, q.z0)); g.lineTo(...P(q.x1, q.z1)); g.stroke(); }
     g.fillStyle = '#b7a58c'; g.beginPath(); g.arc(...P(0, 0), CONFIG.world.squareRadius * k, 0, 7); g.fill();
     g.fillStyle = '#2f8a3e'; g.beginPath(); g.arc(...P(0, 0), 5 * k, 0, 7); g.fill();
     // houses
@@ -113,13 +114,29 @@ export class HUD {
     if (s.mump) { g.strokeStyle = 'rgba(58,160,255,.6)'; g.lineWidth = 2; g.beginPath(); g.arc(0, 0, CONFIG.powerup.shardRadius * sc, 0, 7); g.stroke(); }
     // ice
     g.fillStyle = 'rgba(190,235,255,.55)'; for (const p of s.ice) { g.beginPath(); g.arc(...toM(p.x, p.z), p.r * sc, 0, 7); g.fill(); }
-    // targets
-    const pulse = 0.6 + 0.4 * Math.sin(performance.now() / 180);
+    // targets: undelivered pulse, delivered = green check; dotted path to the nearest open house
+    const pulse = 0.6 + 0.4 * Math.sin(performance.now() / 180), NV = CONFIG.nav || {};
+    let near = null, nd = 1e9;
+    for (const t of s.targets) if (!t.delivered) { const d = Math.hypot(t.b.x - px, t.b.z - pz); if (d < nd) { nd = d; near = t; } }
+    if (near && NV.mapPath !== false) {
+      let [x, y] = toM(near.b.x, near.b.z); const d = Math.hypot(x, y), lim = half - 8; if (d > lim) { x *= lim / d; y *= lim / d; }
+      g.strokeStyle = 'rgba(143,233,255,.85)'; g.lineWidth = 2; g.setLineDash([3, 4]); g.lineDashOffset = -performance.now() / 60;
+      g.beginPath(); g.moveTo(0, 0); g.lineTo(x, y); g.stroke(); g.setLineDash([]);
+    }
     for (const t of s.targets) {
       let [x, y] = toM(t.b.x, t.b.z); const d = Math.hypot(x, y), lim = half - 8;
       const off = d > lim; if (off) { x *= lim / d; y *= lim / d; }
+      if (t.delivered && NV.mapChecks !== false) {
+        if (off) continue;
+        g.fillStyle = '#1fbf6a'; g.beginPath(); g.arc(x, y, 5.5, 0, 7); g.fill();
+        g.save(); g.translate(x, y); g.rotate(-(s.camYaw - Math.PI)); // keep the check upright
+        g.strokeStyle = '#fff'; g.lineWidth = 2; g.lineCap = 'round'; g.beginPath(); g.moveTo(-2.6, 0.2); g.lineTo(-0.6, 2.3); g.lineTo(2.9, -2.2); g.stroke(); g.restore();
+        continue;
+      }
+      const r = t.delivered ? 3.5 : (off ? 4.5 : 6) * (t === near ? 1 + 0.25 * pulse : 1);
+      if (!t.delivered && !off) { g.fillStyle = t.slow ? `rgba(255,190,80,${0.25 * pulse})` : `rgba(63,182,255,${0.25 * pulse})`; g.beginPath(); g.arc(x, y, r + 4 + 3 * pulse, 0, 7); g.fill(); }
       g.fillStyle = t.delivered ? '#3dff9a' : (t.slow ? `rgba(255,190,80,${pulse})` : `rgba(63,182,255,${pulse})`);
-      g.beginPath(); g.arc(x, y, t.delivered ? 3.5 : (off ? 4.5 : 6), 0, 7); g.fill();
+      g.beginPath(); g.arc(x, y, r, 0, 7); g.fill();
       if (!t.delivered && !off) { g.strokeStyle = '#fff'; g.lineWidth = 1.5; g.stroke(); }
     }
     // power-ups

@@ -233,13 +233,8 @@ function candyCane(lit, x, z, rot = 0, h = 0.85) {
   lit.push(paint(g, (px, py, pz, c) => { c.setHex(Math.floor((py * 9 + (px - x) * 9 + (pz - z) * 9) + 100) % 2 ? 0xd8141e : 0xf6f1ea); }));
 }
 function miniTree(lit, glow, x, z, s = 1, seed = 0) {
-  const tr = new THREE.CylinderGeometry(0.07 * s, 0.09 * s, 0.3 * s, 6); tr.translate(x, 0.15 * s, z); lit.push(colorize(tr, 0x4a3221));
-  const tiers = [[0.62, 0.7, 0.22], [0.48, 0.6, 0.6], [0.32, 0.5, 0.95]];
-  for (const [r, h, y] of tiers) {
-    const c = new THREE.ConeGeometry(r * s, h * s, 10, 2); c.translate(x, (y + h / 2) * s, z); lit.push(colorize(c, 0x1d4a2c, 0.35));
-    const sn = new THREE.ConeGeometry(r * s * 0.7, h * s * 0.4, 10); sn.translate(x, (y + h * 0.82) * s, z); lit.push(colorize(sn, 0xf2f6ff, 0.08));
-  }
-  const pts = []; for (let i = 0; i < 16; i++) { const t = i / 16, a = t * Math.PI * 7 + seed; const r = (0.6 - t * 0.45) * s, yy = (0.3 + t * 1.05) * s; pts.push([x + Math.cos(a) * r, yy, z + Math.sin(a) * r]); }
+  // foliage is a needle-card fir from the PineSystem (no cone stacks); this kit only adds bulbs, a star and a bow
+  const pts = []; for (let i = 0; i < 16; i++) { const t = i / 16, a = t * Math.PI * 7 + seed; const r = (0.56 - t * 0.44) * s, yy = (0.3 + t * 1.05) * s; pts.push([x + Math.cos(a) * r, yy, z + Math.sin(a) * r]); }
   bulbs(glow, pts, seed % 2 ? BULB : [0xffd27a, 0xffe7b0], 0.045 * s);
   const st = new THREE.OctahedronGeometry(0.1 * s, 0); st.scale(1, 1.3, 0.5); st.translate(x, 1.5 * s, z); glow.push(colorize(st, new THREE.Color(0xffd84a).multiplyScalar(2.6)));
 }
@@ -313,3 +308,28 @@ export function fenceGarland() {
 }
 
 export { sstep };
+
+/** Door wreath built directly in holder space, its back flush on the door panel: centre (cx, cy), back plane zb,
+ *  facing +z. surf(x, y) -> panel z (for the bow/bulbs following the panel). */
+export function attachedWreath(cx, cy, zb, s = 1) {
+  const lit = [], glow = [], R = 0.3 * s, T = 0.1 * s, zc = zb + T;
+  const w = new THREE.TorusGeometry(R, T, 8, 20); w.translate(cx, cy, zc);
+  lit.push(paint(w, (x, yy, z, c) => { c.setHex(hash2(x * 30, yy * 30) > 0.85 ? 0xb01b22 : 0x1d4a2a).multiplyScalar(0.8 + 0.4 * hash2(yy * 50, x * 20)); }));
+  bow(lit, cx, cy - R, zc + T * 0.9);
+  const pts = []; for (let i = 0; i < 8; i++) { const a = i / 8 * Math.PI * 2; pts.push([cx + Math.cos(a) * R, cy + Math.sin(a) * R, zc + T * 0.95]); }
+  bulbs(glow, pts, [0xffd27a, 0xff3b3b], 0.035);
+  return { lit: mergeGeometries(lit), glow: mergeGeometries(glow) };
+}
+/** Door garland swag along a holder-space path whose points already sit on the facade (each z = surface z);
+ *  the tube's back touches the wall along its whole length. */
+export function attachedGarland(path, tube = 0.075) {
+  const lit = [], glow = [];
+  const P = path.map(([x, y, z]) => [x, y, z + tube]);
+  const swag = tubeAlong(P, tube, Math.max(24, P.length * 3), 6);
+  lit.push(paint(swag, (x, yy, z, c) => { const n = hash2(x * 40, yy * 40); c.setHex(n > 0.82 ? 0xe9f0ff : 0x1c4a2a).multiplyScalar(0.75 + 0.5 * n); }));
+  const inner = P.slice(2, -2);
+  bulbs(glow, inner.filter((_, i) => i % 2).map(p => [p[0], p[1] - 0.04, p[2] + tube * 0.9]), BULB, 0.045);
+  const top = P.filter(p => p[1] >= Math.max(...P.map(q => q[1])) - 0.3);
+  for (const p of [top[0], top[top.length - 1]]) bow(lit, p[0], p[1] + 0.02, p[2] + tube * 0.9);
+  return { lit: mergeGeometries(lit), glow: mergeGeometries(glow) };
+}
