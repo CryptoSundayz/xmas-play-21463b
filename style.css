@@ -1,0 +1,139 @@
+:root { --blue:#3fb6ff; --blue2:#8fdcff; --red:#ff4d5e; --green:#3dff9a; --ink:#e9f2ff; --panel:rgba(6,14,32,.62); }
+* { box-sizing:border-box; -webkit-tap-highlight-color:transparent; }
+html,body { margin:0; height:100%; overflow:hidden; background:#050b18; color:var(--ink); font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; touch-action:none; user-select:none; -webkit-user-select:none; }
+#c { position:fixed; inset:0; width:100%; height:100%; display:block; }
+.hidden { display:none !important; }
+.panel { position:absolute; background:var(--panel); border:1px solid rgba(143,220,255,.18); border-radius:14px; backdrop-filter: blur(6px); -webkit-backdrop-filter: blur(6px); box-shadow:0 6px 24px rgba(0,0,0,.35); }
+.lbl { font-size:11px; letter-spacing:.14em; text-transform:uppercase; opacity:.7; }
+.big { font-size:28px; font-weight:800; line-height:1.1; font-variant-numeric: tabular-nums; }
+.sub { font-size:12px; opacity:.75; }
+.unit { font-size:14px; opacity:.7; font-weight:600; }
+#hud { position:fixed; inset:0; pointer-events:none; }
+#hudScore { top:calc(12px + env(safe-area-inset-top)); left:12px; padding:10px 14px; min-width:170px; }
+#hudScore .big { color:#fff; text-shadow:0 0 12px rgba(63,182,255,.6); }
+#hudTimer { top:calc(12px + env(safe-area-inset-top)); right:12px; padding:10px 14px; text-align:right; min-width:120px; }
+#hudTimer.low .big { color:var(--red); animation: pulse .6s infinite alternate; }
+@keyframes pulse { to { transform:scale(1.08); } }
+#hudCompare { top:calc(12px + env(safe-area-inset-top)); left:50%; transform:translateX(-50%); padding:8px 14px 10px; width:min(400px, 42vw); }
+#hudCompare .row { display:flex; align-items:center; gap:8px; font-size:13px; font-weight:700; padding:3px 6px; border-radius:8px; transition: all .25s; opacity:.55; }
+#hudCompare .name { width:70px; } #hudCompare .ms { width:60px; text-align:right; font-variant-numeric: tabular-nums; }
+#hudCompare .bar { flex:1; height:8px; background:rgba(255,255,255,.08); border-radius:5px; overflow:hidden; }
+#hudCompare .bar i { display:block; height:100%; border-radius:5px; }
+#rowGossip .bar i { width:100%; background:var(--red); }
+#rowOptimum .bar i { width:49.3%; background:var(--green); }
+#rowGossip.active { opacity:1; background:rgba(255,77,94,.18); color:#ffd0d5; box-shadow: inset 0 0 0 1px rgba(255,77,94,.6); }
+#rowOptimum.active { opacity:1; background:rgba(61,255,154,.16); color:#d4ffe9; box-shadow: inset 0 0 0 1px rgba(61,255,154,.6), 0 0 18px rgba(61,255,154,.35); }
+#mumpTag { position:absolute; right:10px; bottom:-14px; font-size:12px; font-weight:900; letter-spacing:.06em; color:#03140b; background:var(--green); padding:2px 8px; border-radius:20px; opacity:0; transform:scale(.6); transition:all .25s; box-shadow:0 0 16px rgba(61,255,154,.7); }
+#hudCompare.mump #mumpTag { opacity:1; transform:scale(1); }
+#hudMap { left:12px; bottom:calc(12px + env(safe-area-inset-bottom)); padding:6px; border-radius:50%; }
+#minimap { display:block; width:200px; height:200px; border-radius:50%; }
+#hudPower { right:12px; bottom:calc(12px + env(safe-area-inset-bottom)); padding:10px 14px; display:flex; align-items:center; gap:12px; min-width:250px; }
+#hudPower .logoSlot svg { display:block; opacity:.35; transition:opacity .3s; }
+#hudPower.on .logoSlot svg { opacity:1; animation: glow 1s infinite alternate; }
+@keyframes glow { to { filter: drop-shadow(0 0 8px var(--blue)); } }
+#powerState { font-weight:700; font-size:14px; margin:2px 0 5px; }
+.pbar { height:6px; background:rgba(255,255,255,.08); border-radius:4px; overflow:hidden; width:150px; }
+.pbar i { display:block; height:100%; width:0; background:linear-gradient(90deg,var(--blue),var(--green)); }
+#toast { position:absolute; top:22%; left:50%; transform:translateX(-50%); font-size:26px; font-weight:900; text-shadow:0 2px 12px rgba(0,0,0,.6), 0 0 20px rgba(63,182,255,.7); opacity:0; transition:opacity .3s; white-space:nowrap; }
+#toast.show { opacity:1; }
+#stormWarn { position:absolute; top:120px; left:50%; transform:translateX(-50%); background:rgba(180,220,255,.15); border:1px solid rgba(200,230,255,.4); padding:6px 14px; border-radius:20px; font-weight:700; font-size:13px; opacity:0; transition:opacity .5s; }
+#stormWarn.show { opacity:1; }
+#holdHint { position:absolute; bottom:30%; left:50%; transform:translateX(-50%); font-weight:800; font-size:16px; text-shadow:0 2px 8px #000; opacity:0; transition:opacity .2s; }
+#holdHint.show { opacity:1; }
+#pauseBtn { position:absolute; top:calc(96px + env(safe-area-inset-top)); right:12px; pointer-events:auto; width:38px; height:38px; border-radius:50%; border:1px solid rgba(143,220,255,.3); background:var(--panel); color:#fff; font-weight:900; }
+
+/* touch UI */
+#touchUI { position:fixed; inset:0; pointer-events:none; }
+#joyZone { position:absolute; left:0; bottom:0; width:45vw; height:50vh; pointer-events:auto; }
+#joyBase { position:absolute; left:calc(30px + env(safe-area-inset-left)); bottom:calc(30px + env(safe-area-inset-bottom)); width:130px; height:130px; border-radius:50%; background:rgba(143,220,255,.12); border:2px solid rgba(143,220,255,.35); }
+#joyKnob { position:absolute; left:37px; top:37px; width:56px; height:56px; border-radius:50%; background:rgba(143,220,255,.55); box-shadow:0 0 18px rgba(63,182,255,.6); }
+#sprintBtn { position:absolute; right:calc(24px + env(safe-area-inset-right)); bottom:calc(120px + env(safe-area-inset-bottom)); width:92px; height:92px; border-radius:50%; pointer-events:auto; background:rgba(255,77,94,.22); border:2px solid rgba(255,140,150,.6); color:#fff; font-weight:900; letter-spacing:.06em; }
+#sprintBtn.on { background:rgba(255,77,94,.6); }
+body.touch #hudMap { left:auto; right:12px; top:calc(100px + env(safe-area-inset-top)); bottom:auto; }
+body.touch #minimap { width:120px; height:120px; }
+body.touch #hudPower { bottom:calc(12px + env(safe-area-inset-bottom)); min-width:0; padding:8px 10px; }
+body.touch #hudPower .pbar { width:90px; }
+body.touch #pauseBtn { top:auto; bottom:calc(230px + env(safe-area-inset-bottom)); right:calc(52px + env(safe-area-inset-right)); }
+
+@media (max-width: 720px) {
+  .big { font-size:20px; }
+  #hudScore { min-width:0; padding:7px 10px; } #hudTimer { min-width:0; padding:7px 10px; }
+  #hudCompare { top:auto; bottom:calc(150px + env(safe-area-inset-bottom)); width:min(300px,70vw); padding:6px 10px 8px; }
+  #hudCompare .row { font-size:11px; } #hudCompare .name { width:56px; } #hudCompare .ms { width:50px; }
+  #stormWarn { top:90px; }
+  #hudPower .lbl { display:none; } #powerState { font-size:12px; }
+}
+
+/* screens */
+.screen { position:fixed; inset:0; display:flex; align-items:center; justify-content:center; background: radial-gradient(ellipse at 50% 30%, rgba(20,40,90,.55), rgba(3,7,18,.92)); z-index:10; padding:16px; overflow:auto; }
+.card { max-width:640px; width:100%; text-align:center; background:rgba(6,14,32,.75); border:1px solid rgba(143,220,255,.25); border-radius:22px; padding:26px 26px 20px; box-shadow:0 20px 60px rgba(0,0,0,.5), 0 0 60px rgba(63,182,255,.12); }
+h1 { margin:6px 0 2px; font-size:clamp(28px,5vw,44px); letter-spacing:.01em; text-shadow:0 0 22px rgba(63,182,255,.55); }
+h2 { margin:0 0 12px; font-weight:500; font-size:16px; color:var(--blue2); letter-spacing:.12em; text-transform:uppercase; }
+.story { line-height:1.5; font-size:15px; opacity:.92; }
+.red { color:var(--red); font-weight:700; } .blue { color:var(--blue); font-weight:700; }
+.how { display:grid; grid-template-columns:1fr 1fr; gap:6px 14px; text-align:left; font-size:13px; margin:14px 0; background:rgba(255,255,255,.04); padding:12px; border-radius:12px; }
+.opts { display:flex; gap:14px; justify-content:center; margin:8px 0 14px; flex-wrap:wrap; }
+select { background:#0b1a36; color:#fff; border:1px solid rgba(143,220,255,.35); border-radius:8px; padding:6px 8px; margin-left:6px; font-size:14px; }
+.cta { pointer-events:auto; font-size:18px; font-weight:800; padding:13px 30px; border-radius:40px; border:0; color:#03121f; background:linear-gradient(90deg,#43c3ff,#3dff9a); box-shadow:0 0 30px rgba(63,182,255,.5); cursor:pointer; }
+.cta:active { transform:scale(.97); }
+.ghost { font-size:15px; padding:11px 22px; border-radius:40px; background:transparent; color:#cfe; border:1px solid rgba(143,220,255,.4); margin-left:8px; cursor:pointer; }
+.foot { margin-top:12px; font-size:12px; opacity:.6; }
+.logoHero svg { width:min(260px,60vw); height:auto; }
+#ovStats { display:grid; grid-template-columns:repeat(auto-fit,minmax(96px,1fr)); gap:10px; margin:14px 0 18px; }
+#ovStats div { background:rgba(255,255,255,.05); border-radius:12px; padding:10px; }
+#ovStats b { display:block; font-size:22px; }
+#ovStats div { font-size:13px; }
+#ending { position:fixed; inset:auto 0 0 0; bottom:6vh; text-align:center; z-index:9; pointer-events:none; }
+#ending h1 { font-size:clamp(34px,7vw,72px); text-shadow:0 0 30px rgba(63,182,255,.9), 0 0 60px rgba(63,182,255,.5); }
+#ending p { font-size:18px; opacity:.9; margin:4px 0 16px; }
+#ending .cta { pointer-events:auto; }
+.endLogo svg { width:min(200px,40vw); height:auto; }
+#loading { flex-direction:column; gap:14px; z-index:20; font-weight:600; }
+.spinner { width:44px; height:44px; border-radius:50%; border:4px solid rgba(143,220,255,.2); border-top-color:var(--blue); animation: spin 1s linear infinite; }
+@keyframes spin { to { transform:rotate(360deg); } }
+
+/* Boosted callout + combo */
+#boostCallout { position:absolute; top:30%; left:50%; transform:translate(-50%,-50%) scale(.4); text-align:center; opacity:0; pointer-events:none; }
+#boostCallout .bc-main { font-size:clamp(54px, 11vw, 120px); font-weight:900; font-style:italic; letter-spacing:.04em; color:#eafaff;
+  background:linear-gradient(90deg,#3fb6ff,#9ff4ff 45%,#3dff9a); -webkit-background-clip:text; background-clip:text; -webkit-text-fill-color:transparent;
+  filter:drop-shadow(0 0 18px rgba(63,182,255,.9)) drop-shadow(0 4px 10px rgba(0,0,0,.6)); }
+#boostCallout .bc-sub { margin-top:4px; font-size:clamp(14px,2.2vw,22px); font-weight:800; color:#bdf0ff; text-shadow:0 0 12px rgba(63,182,255,.9), 0 2px 6px #000; letter-spacing:.08em; text-transform:uppercase; }
+#boostCallout.show { animation: boostIn var(--bd, 2.2s) cubic-bezier(.2,1.4,.4,1) forwards; }
+@keyframes boostIn {
+  0% { opacity:0; transform:translate(-50%,-50%) scale(.3) rotate(-6deg); }
+  14% { opacity:1; transform:translate(-50%,-50%) scale(1.18) rotate(2deg); }
+  24% { transform:translate(-50%,-50%) scale(.96) rotate(-1deg); }
+  32% { transform:translate(-50%,-50%) scale(1.02) rotate(0); }
+  80% { opacity:1; transform:translate(-50%,-50%) scale(1); }
+  100% { opacity:0; transform:translate(-50%,-62%) scale(1.08); }
+}
+#combo { position:absolute; top:150px; right:16px; text-align:right; opacity:0; pointer-events:none; }
+#combo .cb-main { font-size:34px; font-weight:900; font-style:italic; color:#7fe6ff; text-shadow:0 0 14px rgba(63,182,255,.95), 0 2px 6px #000; }
+#combo .cb-sub { font-size:14px; font-weight:800; color:#3dff9a; text-shadow:0 2px 6px #000; }
+#combo.show { opacity:1; }
+#combo.pop .cb-main { animation: comboPop .45s cubic-bezier(.2,1.6,.4,1); }
+@keyframes comboPop { 0% { transform:scale(1.7); } 100% { transform:scale(1); } }
+#combo .cb-bar { height:4px; margin-top:4px; margin-left:auto; width:120px; border-radius:2px; background:rgba(255,255,255,.15); overflow:hidden; }
+#combo .cb-bar i { display:block; height:100%; background:linear-gradient(90deg,#3fb6ff,#3dff9a); }
+@media (max-width: 700px) { #combo { top:118px; } #combo .cb-main { font-size:26px; } }
+
+/* phones: keep HUD panels clear of each other and of the touch controls */
+@media (max-width: 720px) {
+  #hudScore { max-width:56vw; } #hudScore .sub, #hudScore small { font-size:10px; }
+  #minimap { width:104px; height:104px; }
+  body.touch #hudMap { top:calc(84px + env(safe-area-inset-top)); right:10px; padding:4px; }
+  #pauseBtn { top:calc(84px + env(safe-area-inset-top)); right:auto; left:12px; }
+  #hudCompare { bottom:calc(228px + env(safe-area-inset-bottom)); }
+  #hudPower { min-width:0; max-width:54vw; padding:8px 10px; gap:8px; }
+}
+
+/* phone portrait layout: score/timer row, then latency bars left + minimap right, pause under the map */
+@media (max-width: 720px) {
+  #hudCompare { top:calc(74px + env(safe-area-inset-top)); bottom:auto; left:12px; transform:none; width:calc(100vw - 160px); }
+  body.touch #hudMap { top:calc(70px + env(safe-area-inset-top)); right:10px; padding:4px; }
+  body.touch #minimap { width:118px; height:118px; }
+  #pauseBtn { top:calc(200px + env(safe-area-inset-top)); }
+  #hudPower { min-width:0; left:auto; max-width:calc(100vw - 190px); padding:8px 10px; }
+  #combo { top:212px; }
+}
+

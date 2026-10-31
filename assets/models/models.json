@@ -1,0 +1,25 @@
+{
+  "files": [
+    "assets/models/building_bakery.glb",
+    "assets/models/building_church.glb",
+    "assets/models/building_gingerbread.glb",
+    "assets/models/building_inn.glb",
+    "assets/models/building_log_cabin.glb",
+    "assets/models/building_stone_cottage.glb",
+    "assets/models/building_townhouse.glb",
+    "assets/models/building_toy_workshop.glb",
+    "assets/models/building_validator_house.glb",
+    "assets/models/building_windmill.glb",
+    "assets/models/prop_bench.glb",
+    "assets/models/prop_christmas_tree.glb",
+    "assets/models/prop_gift_box.glb",
+    "assets/models/prop_gift_pile.glb",
+    "assets/models/prop_pine.glb",
+    "assets/models/prop_sleigh.glb",
+    "assets/models/prop_snowman.glb",
+    "assets/models/prop_street_lamp.glb",
+    "assets/models/reindeer.glb",
+    "assets/models/santa.glb",
+    "assets/models/mascot.glb"
+  ]
+}

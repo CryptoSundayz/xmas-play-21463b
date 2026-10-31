@@ -1,0 +1,100 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover" />
+<meta name="theme-color" content="#050b18" />
+<title>Santa's Block Delivery — Optimum mump2p</title>
+<link rel="icon" href="data:," />
+<link rel="stylesheet" href="style.css" />
+<script type="importmap">
+{ "imports": { "three": "./vendor/three/three.module.js", "three/addons/": "./vendor/three/addons/" } }
+</script>
+</head>
+<body>
+<canvas id="c"></canvas>
+
+<!-- ============================== HUD -->
+<div id="hud" class="hidden">
+  <div id="hudScore" class="panel">
+    <div class="lbl" id="scoreLabel">Staked ETH</div>
+    <div class="big"><span id="scoreVal">0</span> <span class="unit" id="scoreUnit">ETH</span></div>
+    <div class="sub">target <span id="scoreTarget">3M</span> · <span id="blocksLeft">0/0</span> validators</div>
+  </div>
+  <div id="hudCompare" class="panel">
+    <div class="row" id="rowGossip"><span class="name" id="gossipName">Gossip</span><div class="bar"><i></i></div><span class="ms" id="gossipMs">275 ms</span></div>
+    <div class="row" id="rowOptimum"><span class="name" id="optimumName">Optimum</span><div class="bar"><i></i></div><span class="ms" id="optimumMs">135 ms</span></div>
+    <div id="mumpTag">mump2p 3x</div>
+  </div>
+  <div id="hudTimer" class="panel">
+    <div class="lbl" id="levelName">Level 1</div>
+    <div class="big" id="timerVal">2:00</div>
+    <div class="sub" id="timerSub"></div>
+  </div>
+  <div id="hudMap" class="panel"><canvas id="minimap" width="220" height="220"></canvas></div>
+  <div id="hudPower" class="panel">
+    <div class="logoSlot" id="powerLogo"></div>
+    <div class="ptxt"><div class="lbl">mump2p</div><div id="powerState">Find an Optimum pickup</div><div class="pbar"><i id="powerBar"></i></div></div>
+  </div>
+  <div id="toast"></div>
+  <div id="boostCallout"><div class="bc-main"></div><div class="bc-sub"></div></div>
+  <div id="combo"><div class="cb-main"></div><div class="cb-sub"></div><div class="cb-bar"><i></i></div></div>
+  <div id="stormWarn">❄ SNOWSTORM — visibility low</div>
+  <div id="holdHint"></div>
+  <button id="pauseBtn" title="Pause">II</button>
+</div>
+
+<!-- mobile controls -->
+<div id="touchUI" class="hidden">
+  <div id="joyZone"><div id="joyBase"><div id="joyKnob"></div></div></div>
+  <button id="sprintBtn">SPRINT</button>
+</div>
+
+<!-- ============================== Screens -->
+<div id="title" class="screen">
+  <div class="card">
+    <div class="logoHero" id="heroLogo"></div>
+    <h1 id="titleText">Santa's Block Delivery</h1>
+    <h2 id="subtitleText">An Optimum mump2p Christmas</h2>
+    <p class="story"><span id="storyChar">Santa</span> is carrying the newest <b>Ethereum block</b>. Every validator in the village needs it before the slot ends.
+      Plain <span class="red">gossip</span> delivers it house by house in <b id="storyGossip">275.3 ms</b>.
+      Grab the <span class="blue">Optimum</span> pickups and <b>mump2p</b> splits the block into shards that reach everyone at once — <b id="storyOpt">135.6 ms</b>, about <b>3x faster</b>.</p>
+    <div class="how">
+      <div><b>Move</b> WASD / arrows · joystick</div>
+      <div><b>Sprint</b> Shift · SPRINT button</div>
+      <div><b>Jump</b> Space</div>
+      <div><b>Camera</b> drag mouse / swipe · Q/E</div>
+      <div><b>Deliver</b> stand at a <span class="blue">blue-marked</span> door</div>
+      <div><b>Watch out</b> snowstorms, ice, flickering slow nodes</div>
+      <div><b>Pause</b> P / Esc</div>
+    </div>
+    <div class="opts">
+      <label>Difficulty <select id="selDifficulty"><option value="easy">Easy</option><option value="normal">Normal</option><option value="hard">Hard</option></select></label>
+      <label>Quality <select id="selQuality"><option value="auto">Auto</option><option value="low">Low</option><option value="medium">Medium</option><option value="high">High</option></select></label>
+    </div>
+    <button id="playBtn" class="cta">Start delivering</button>
+    <div class="foot" id="titleFoot">Target: 3M+ ETH staked</div>
+  </div>
+</div>
+
+<div id="overlay" class="screen hidden">
+  <div class="card">
+    <h1 id="ovTitle">Level complete</h1>
+    <p id="ovText"></p>
+    <div id="ovStats"></div>
+    <div class="btns"><button id="ovBtn" class="cta">Next level</button><button id="ovBtn2" class="ghost hidden">Title</button></div>
+  </div>
+</div>
+
+<div id="ending" class="hidden">
+  <div class="endLogo" id="endLogo"></div>
+  <h1 id="endText">This is Optimum</h1>
+  <p id="endSub"></p>
+  <button id="endBtn" class="cta">Play again</button>
+</div>
+
+<div id="loading" class="screen"><div class="spinner"></div><div>Building the village…</div></div>
+
+<script type="module" src="src/main.js"></script>
+</body>
+</html>
