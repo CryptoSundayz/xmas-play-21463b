@@ -150,7 +150,7 @@ export function resolveWindows(obj, holder, rects) {
 }
 
 // ------------------------------------------------------------------ runtime
-import { WINDOWS } from '../assets/windows.js';
+import { WINDOWS } from '../assets/windows.js?v=4c34af6b';
 
 export const ROOM = { livingA: 0, livingB: 1, livingC: 2, bakery: 3, workshop: 4, church: 5 };
 const N_ROOMS = 6, N_TILES = 4; // tiles per room: back wall, side wall, floor, mid-depth furniture card (alpha)

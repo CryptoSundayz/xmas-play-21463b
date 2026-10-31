@@ -38,35 +38,25 @@ export function unlockAudioGesture() { // call synchronously inside a click/touc
     try { const b = ctx.createBuffer(1, 1, 22050), s = ctx.createBufferSource(); s.buffer = b; s.connect(ctx.destination); s.start(0); } catch (e) { /* ignore */ }
   }
 }
-export function audioStatus() { return { ctx: ctx ? ctx.state : 'none', sampleRate: ctx?.sampleRate ?? null, baseLatency: ctx?.baseLatency ?? null, limiter: !legacy, session: navigator.audioSession?.type || 'n/a', silentEl: silentEl ? !silentEl.paused : false, muted: st.muted }; }
+export const AUDIO_REV = 'smooth-env-2'; // shows in __xmas.audio() so a stale cached audio.js is easy to spot
+export function audioStatus() { return { rev: AUDIO_REV, ctx: ctx ? ctx.state : 'none', sampleRate: ctx?.sampleRate ?? null, baseLatency: ctx?.baseLatency ?? null, limiter: true, session: navigator.audioSession?.type || 'n/a', silentEl: silentEl ? !silentEl.paused : false, muted: st.muted }; }
 // output chain: master -> glue compressor -> brick-wall limiter -> soft clip (ceiling ~-1.1 dBFS) -> out.
-// Before: only a gentle -14 dB 3:1 compressor, so stacked fireworks + ending music could hit 0 dBFS and clip
-// (the "gresek-gresek" crackle) - and ~20 nodes per firework could overload the Mac's audio thread.
-const CEIL = 0.88; let lastFw = -1, crackBuf = null, legacy = false;
+// Click hygiene (the ending "kritik-kritik", Daniel 2026-10-31): every voice starts from gain 0 (a GainNode's
+// default 1.0 used to leak one full-scale noise sample before setValueAtTime at a fractional start time), rises
+// on a LINEAR attack of >= 8 ms, decays, then ramps linearly to exactly 0 before stop(). No crackle/pop effects.
+const CEIL = 0.88, MIN_ATTACK = 0.008, RELEASE = 0.025; let lastFw = -1;
 function softClipCurve(n = 2048) { const c = new Float32Array(n); for (let i = 0; i < n; i++) { const x = i / (n - 1) * 2 - 1; c[i] = CEIL * Math.tanh(x * 1.25) / Math.tanh(1.25); } return c; }
 function buildGraph(c) {
   master = c.createGain(); master.gain.value = (cfg?.master ?? 0.9);
   const comp = c.createDynamicsCompressor(); comp.threshold.value = -14; comp.ratio.value = 3;
   master.connect(comp);
-  if (legacy) comp.connect(c.destination);
-  else {
-    const lim = c.createDynamicsCompressor(); lim.threshold.value = -4; lim.knee.value = 0; lim.ratio.value = 20; lim.attack.value = 0.001; lim.release.value = 0.12;
-    const clip = c.createWaveShaper(); clip.curve = softClipCurve(); clip.oversample = '2x';
-    comp.connect(lim); lim.connect(clip); clip.connect(c.destination);
-  }
+  const lim = c.createDynamicsCompressor(); lim.threshold.value = -4; lim.knee.value = 0; lim.ratio.value = 20; lim.attack.value = 0.001; lim.release.value = 0.12;
+  const clip = c.createWaveShaper(); clip.curve = softClipCurve(); clip.oversample = '2x';
+  comp.connect(lim); lim.connect(clip); clip.connect(c.destination);
   musicBus = c.createGain(); sfxBus = c.createGain(); boostBus = c.createGain(); boostBus.gain.value = 0;
   musicBus.connect(master); sfxBus.connect(master); boostBus.connect(musicBus);
   // shared noise buffer + a soft feedback-delay "room" for the music
   noiseBuf = c.createBuffer(1, c.sampleRate * 2, c.sampleRate); const d = noiseBuf.getChannelData(0); for (let i = 0; i < d.length; i++) d[i] = Math.random() * 2 - 1;
-  // firework crackle: ONE pre-rendered buffer instead of 14 noise voices per firework. Each pop is a short damped
-  // 1.8-4.2 kHz sinusoid with a raised-cosine onset: crisp, but band-limited (no full-band digital "static" edges)
-  crackBuf = c.createBuffer(1, Math.round(c.sampleRate * 1.2), c.sampleRate); const cd = crackBuf.getChannelData(0), SR = c.sampleRate;
-  for (let k = 0; k < 22; k++) {
-    const at = Math.floor((0.05 + Math.random() * 1.05) * SR), f = 1800 + Math.random() * 2400, tau = 0.002 + Math.random() * 0.004, a = 0.35 + Math.random() * 0.4;
-    const on = Math.floor(SR * 0.0008), len = Math.floor(SR * tau * 6), ph = Math.random() * 6.283;
-    for (let i = 0; i < len && at + i < cd.length; i++) { const w = i < on ? 0.5 - 0.5 * Math.cos(Math.PI * i / on) : 1, t = i / SR;
-      cd[at + i] += a * w * Math.exp(-t / tau) * Math.sin(6.283 * f * t + ph); }
-  }
   const dl = c.createDelay(1), fb = c.createGain(), wet = c.createGain(), lp = c.createBiquadFilter();
   dl.delayTime.value = 0.23; fb.gain.value = 0.28; wet.gain.value = 0.22; lp.type = 'lowpass'; lp.frequency.value = 2600;
   musicBus.connect(dl); dl.connect(lp); lp.connect(fb); fb.connect(dl); lp.connect(wet); wet.connect(master);
@@ -79,11 +69,11 @@ function buildGraph(c) {
 // (counted by scheduled end time, so it also works for sounds scheduled ahead and in an OfflineAudioContext)
 let ends = [];
 const voiceOK = (out, t0 = ctx.currentTime) => {
-  if (legacy || out !== sfxBus) return true;
+  if (out !== sfxBus) return true;
   if (ends.length > 64) ends = ends.filter(e => e > ctx.currentTime);
   let n = 0; for (const e of ends) if (e > t0) n++; return n < (cfg?.maxVoices ?? 40);
 };
-const track = (end, out) => { if (out === sfxBus && !legacy) ends.push(end); };
+const track = (end, out) => { if (out === sfxBus) ends.push(end); };
 export function initAudio(on = true) {
   if (on && typeof on === 'object') { configureAudio(on); on = on.enabled !== false; }
   enabled = !!on; if (!enabled) return;
@@ -118,34 +108,41 @@ export const audioState = {
 
 // ---------------------------------------------------------------- voices
 const mtof = m => 440 * Math.pow(2, (m - 69) / 12);
-function env(g, t0, a, peak, dec, sus = 0.0001, rel = 0) {
-  g.gain.setValueAtTime(0.0001, t0); g.gain.exponentialRampToValueAtTime(peak, t0 + a);
-  g.gain.exponentialRampToValueAtTime(Math.max(sus, 0.0001), t0 + a + dec);
-  if (rel) g.gain.exponentialRampToValueAtTime(0.0001, t0 + a + dec + rel);
+// One envelope for every voice: gain is 0 before t0 (GainNode defaults to 1.0!), linear attack >= MIN_ATTACK
+// (an exponential ramp from 1e-4 does ~90% of its rise in the last ms, i.e. a click), exponential decay to -60 dB,
+// then a linear ramp to exactly 0. Returns the time the voice is silent; stop() goes a little after that.
+function env(g, t0, a, peak, dec) {
+  const p = g.gain, ta = t0 + Math.max(a, MIN_ATTACK), td = ta + Math.max(dec, 0.02), end = td + RELEASE;
+  p.value = 0; p.setValueAtTime(0, t0); p.linearRampToValueAtTime(peak, ta);
+  p.exponentialRampToValueAtTime(Math.max(peak * 0.001, 1e-6), td); p.linearRampToValueAtTime(0, end);
+  return end;
 }
-function osc(type, f, t0, dur, vol, out, { a = 0.005, dec = dur, detune = 0, slide = 0, filter = 0 } = {}) {
+function osc(type, f, t0, dur, vol, out, { a = 0.01, dec = dur, detune = 0, slide = 0, filter = 0 } = {}) {
   if (!voiceOK(out, t0)) return;
   const o = ctx.createOscillator(), g = ctx.createGain(); o.type = type; o.frequency.setValueAtTime(f, t0); o.detune.value = detune;
   if (slide) o.frequency.exponentialRampToValueAtTime(slide, t0 + dur);
-  env(g, t0, a, vol, dec);
+  const end = env(g, t0, a, vol, dec) + 0.02;
   let n = o; if (filter) { const lp = ctx.createBiquadFilter(); lp.type = 'lowpass'; lp.frequency.value = filter; o.connect(lp); n = lp; }
-  n.connect(g); g.connect(out); o.start(t0); o.stop(t0 + a + dec + 0.05); track(t0 + a + dec + 0.05, out);
+  n.connect(g); g.connect(out); o.start(t0); o.stop(end); track(end, out);
 }
-function noise(t0, dur, vol, out, { type = 'highpass', f = 6000, q = 0.7, a = 0.002, f2 = 0 } = {}) {
+function noise(t0, dur, vol, out, { type = 'highpass', f = 6000, q = 0.7, a = 0.01, f2 = 0 } = {}) {
   if (!voiceOK(out, t0)) return;
   const s = ctx.createBufferSource(); s.buffer = noiseBuf; s.playbackRate.value = 0.8 + Math.random() * 0.4;
   const bq = ctx.createBiquadFilter(); bq.type = type; bq.frequency.setValueAtTime(f, t0); bq.Q.value = q; if (f2) bq.frequency.exponentialRampToValueAtTime(f2, t0 + dur);
-  const g = ctx.createGain(); env(g, t0, a, vol, dur);
-  s.connect(bq); bq.connect(g); g.connect(out); s.start(t0, Math.random() * 1.5); s.stop(t0 + a + dur + 0.05); track(t0 + a + dur + 0.05, out);
+  const g = ctx.createGain(), end = env(g, t0, a, vol, dur) + 0.02;
+  s.connect(bq); bq.connect(g); g.connect(out); s.start(t0, Math.random() * 1.5); s.stop(end); track(end, out);
 }
 const V = {
-  bell(m, t, d, v, out) { const f = mtof(m); osc('sine', f, t, Math.max(0.6, d * 1.6), v, out); osc('sine', f * 2.76, t, 0.35, v * 0.25, out); osc('triangle', f * 2, t, 0.5, v * 0.18, out); },
-  musicBox(m, t, d, v, out) { const f = mtof(m); osc('sine', f, t, 1.4, v, out, { dec: 1.4 }); osc('sine', f * 4, t, 0.25, v * 0.12, out); osc('sine', f * 3.01, t, 0.5, v * 0.08, out); },
+  // bell / music box: soft 8-12 ms mallet attack; the inharmonic partial is a sine (a triangle's odd harmonics put a tick at 3-4 kHz)
+  bell(m, t, d, v, out) { const f = mtof(m); osc('sine', f, t, Math.max(0.6, d * 1.6), v, out, { a: 0.008 }); osc('sine', f * 2.76, t, 0.35, v * 0.2, out, { a: 0.012 }); osc('sine', f * 2, t, 0.5, v * 0.16, out, { a: 0.01 }); },
+  musicBox(m, t, d, v, out) { const f = mtof(m); osc('sine', f, t, 1.4, v, out, { a: 0.008, dec: 1.4 }); osc('sine', f * 4, t, 0.25, v * 0.1, out, { a: 0.012 }); osc('sine', f * 3.01, t, 0.5, v * 0.08, out, { a: 0.012 }); },
   pianoish(m, t, d, v, out) { const f = mtof(m); osc('triangle', f, t, d * 0.9, v, out, { filter: 1800 }); osc('sine', f * 2, t, d * 0.5, v * 0.25, out); },
-  bass(m, t, d, v, out) { osc('triangle', mtof(m), t, d * 0.85, v, out, { a: 0.01 }); osc('sine', mtof(m) / 2, t, d * 0.8, v * 0.5, out); },
+  bass(m, t, d, v, out) { osc('triangle', mtof(m), t, d * 0.85, v, out, { a: 0.012, filter: 1200 }); osc('sine', mtof(m) / 2, t, d * 0.8, v * 0.5, out, { a: 0.015 }); },
   pad(m, t, d, v, out) { for (const dt of [-7, 7]) osc('sawtooth', mtof(m), t, d, v, out, { a: 0.25, dec: d, detune: dt, filter: 900 }); },
-  arp(m, t, d, v, out) { osc('square', mtof(m), t, d, v, out, { filter: 2600, dec: d * 0.9 }); },
-  sleigh(t, v, out) { noise(t, 0.09, v, out, { f: 7500 }); osc('sine', 2900 + Math.random() * 400, t, 0.12, v * 0.25, out); },
+  arp(m, t, d, v, out) { osc('square', mtof(m), t, d, v, out, { filter: 2600, dec: d * 0.9, a: 0.008 }); },
+  // sleigh bells: a soft high noise shimmer only. The old 2.9-3.3 kHz sine "ting" on every half beat (5 ms
+  // exponential attack) was a tonal 3 kHz tick, exactly the band the ear calls "kritik".
+  sleigh(t, v, out) { noise(t, 0.08, v, out, { type: 'highpass', f: 7000, q: 0.6, a: 0.02 }); },
 };
 
 // ---------------------------------------------------------------- scores (public-domain melodies)
@@ -164,7 +161,7 @@ let cur = null, pendingTrack = null, boostOn = false, schedTimer = 0;
 const TRACKS = {
   title: { bpm: 84, mel: DECK, ch: DECK_CH, loop: true, voice: 'musicBox', vol: 0.16, bassVol: 0.0, pad: 0.018 },
   game: { bpm: 132, mel: JINGLE, ch: JINGLE_CH, loop: true, voice: 'bell', vol: 0.11, bassVol: 0.12, comp: 0.05, sleigh: 0.05 },
-  ending: { bpm: 112, mel: WISH_END, ch: [43, 48, 53, 50, 43, 48, 53, 43, 48], loop: false, voice: 'bell', vol: 0.13, bassVol: 0.1, comp: 0.05, sleigh: 0.04, pad: 0.015 },
+  ending: { bpm: 112, mel: WISH_END, ch: [43, 48, 53, 50, 43, 48, 53, 43, 48], loop: false, voice: 'bell', vol: 0.13, bassVol: 0.1, comp: 0.05, sleigh: 0.03, pad: 0.015 },
 };
 function schedule(until) {
   if (!cur || !ctx) return;
@@ -227,43 +224,36 @@ export const sfx = {
   jump() { if (!ok()) return; this.whoosh(0.35, 0.12); },
   land() { this.step(1); },
   shard() { if (!ok()) return; const t = now(); tone(1800 + Math.random() * 600, t, 0.18, 'sine', 0.05, 3200); },
-  tick() { if (!ok()) return; tone(880, now(), 0.06, 'square', 0.04); },
+  tick() { if (!ok()) return; tone(880, now(), 0.06, 'triangle', 0.05); },
   hold() { if (!ok()) return; tone(660, now(), 0.05, 'sine', 0.03); },
   jingle() { if (!ok()) return; const nn = [76, 76, 76, 0, 76, 76, 76, 0, 76, 79, 72, 74, 76]; const t = now(); nn.forEach((m, i) => m && V.bell(m, t + i * 0.15, 0.2, 0.12, sfxBus)); this.bells(0.6); },
   fail() { if (!ok()) return; const t = now(); tone(392, t, 0.3, 'triangle', 0.18); tone(330, t + 0.25, 0.3, 'triangle', 0.18); tone(262, t + 0.5, 0.6, 'triangle', 0.18); },
   boom() { this.firework(0.6); },
-  firework(v = 1, delay = 0) { // whistle up, then boom + crackle
-    if (!ok()) return; const t = now() + delay;
-    if (legacy) {
-      osc('sine', 900, t - 0.9 < now() ? now() : t - 0.9, 0.8, 0.02 * v, sfxBus, { slide: 2400 });
-      noise(t, 0.8, 0.22 * v, sfxBus, { type: 'lowpass', f: 900, f2: 120, a: 0.004 });
-      osc('sine', 70, t, 0.6, 0.18 * v, sfxBus, { slide: 35 });
-      for (let i = 0; i < 14; i++) noise(t + 0.25 + Math.random() * 0.9, 0.03, 0.05 * v, sfxBus, { f: 5000 });
-      return;
-    }
-    // overlapping launches (finale salvos): later ones in the same 150 ms are quieter and skip the whistle
+  // fireworks: soft rising whoosh on launch, warm low boom on burst, and (solo bursts only) a faint slow-attack
+  // two-note shimmer below 2 kHz. No crackle of any kind (no pre-rendered pop buffer, no noise-grain pops).
+  firework(v = 1, delay = 0) {
+    if (!ok()) return; const t = now() + delay, t0 = now();
+    // overlapping launches (finale salvos): later ones in the same 150 ms are quieter and skip whoosh + shimmer
     const dense = t - lastFw < 0.15; lastFw = Math.max(lastFw, t);
     v *= (cfg?.fireworkGain ?? 0.6) * (dense ? 0.5 : 1);
-    if (!dense) osc('sine', 900, Math.max(now(), t - 0.9), 0.8, 0.015 * v, sfxBus, { slide: 2400, a: 0.03 });
-    noise(t, 0.8, 0.22 * v, sfxBus, { type: 'lowpass', f: 900, f2: 120, a: 0.008 });
-    osc('sine', 70, t, 0.6, 0.16 * v, sfxBus, { slide: 35, a: 0.01 });
-    // crackle tail removed: its 2-4 kHz pops read as "gresek" static on device speakers (Daniel 2026-10-31)
-    if (false && crackBuf && voiceOK(sfxBus, t + 0.2)) { // one source for the whole crackle tail
-      const s = ctx.createBufferSource(), g = ctx.createGain(); s.buffer = crackBuf; s.playbackRate.value = 0.9 + Math.random() * 0.2;
-      g.gain.setValueAtTime(0.0001, t + 0.2); g.gain.linearRampToValueAtTime(0.5 * v, t + 0.22); g.gain.setTargetAtTime(0.0001, t + 1.1, 0.12);
-      s.connect(g); g.connect(sfxBus); s.start(t + 0.2); s.stop(t + 1.6); track(t + 1.6, sfxBus);
-    }
+    if (!dense && t - t0 > 0.3) { const ws = Math.max(t0, t - 0.85); noise(ws, Math.max(0.15, t - ws - 0.3), 0.05 * v, sfxBus, { type: 'bandpass', f: 300, f2: 1300, q: 0.8, a: Math.min(0.3, (t - ws) * 0.45) }); }
+    noise(t, 0.9, 0.2 * v, sfxBus, { type: 'lowpass', f: 520, f2: 90, q: 0.5, a: 0.018 });
+    osc('sine', 66, t, 0.75, 0.16 * v, sfxBus, { slide: 36, a: 0.015 });
+    osc('sine', 132, t, 0.35, 0.05 * v, sfxBus, { slide: 70, a: 0.015 }); // body, so small speakers hear the boom
+    if (!dense && (cfg?.fireworkShimmer ?? true)) { const r = 84 + [0, 2, 4, 7][Math.floor(Math.random() * 4)];
+      osc('sine', mtof(r), t + 0.12, 0.9, 0.007 * v, sfxBus, { a: 0.04 }); osc('sine', mtof(r + 7), t + 0.2, 0.8, 0.005 * v, sfxBus, { a: 0.05 }); }
   },
   wind(k) { if (!ctx || !windGain) return; const t = ctx.currentTime; windGain.gain.setTargetAtTime(enabled ? (cfg?.windBase ?? 0.025) + k * (cfg?.windStorm ?? 0.22) : 0, t, 0.4); windFilt.frequency.setTargetAtTime(380 + k * 500 + Math.sin(t * 0.7) * 120, t, 0.3); },
 };
 
 // QA: render the ending (music + a dense firework show) into an OfflineAudioContext and measure it.
-// legacyMode=true renders with the pre-fix chain (no limiter / caps, 14-voice crackle) for a before/after.
-export async function renderEndingOffline(sec = 20, legacyMode = false, fwPerSec = 2.2) {
-  const saved = { ctx, master, musicBus, sfxBus, boostBus, windGain, windFilt, noiseBuf, crackBuf, cur, enabled, legacy, lastFw, ends };
+// The old legacyMode argument is ignored (the pre-limiter chain and its crackle were removed); opts.samples=true
+// also returns channel 0 as a Float32Array for spectrograms / click detection.
+export async function renderEndingOffline(sec = 20, _legacy = false, fwPerSec = 2.2, opts = {}) {
+  const saved = { ctx, master, musicBus, sfxBus, boostBus, windGain, windFilt, noiseBuf, cur, enabled, lastFw, ends };
   const SR = 48000, oc = new OfflineAudioContext(2, SR * sec, SR);
   try {
-    legacy = legacyMode; ends = []; lastFw = -1; enabled = true; ctx = oc; buildGraph(oc);
+    ends = []; lastFw = -1; enabled = true; ctx = oc; buildGraph(oc);
     musicBus.gain.value = st.music * 0.5; sfxBus.gain.value = st.sfx;
     cur = { name: 'ending', T: TRACKS.ending, i: 0, beat: 0, loopN: 0, next: 0.12 };
     let nodes = 0; for (const m of ['createOscillator', 'createBufferSource', 'createGain', 'createBiquadFilter']) { const f = oc[m].bind(oc); oc[m] = (...a) => { nodes++; return f(...a); }; }
@@ -274,12 +264,15 @@ export async function renderEndingOffline(sec = 20, legacyMode = false, fwPerSec
     for (const t of fws) sfx.firework(0.45 + Math.random() * 0.55, t);
     const fwNodes = nodes - n0; // offline currentTime = 0 -> delay = absolute time
     const buf = await oc.startRendering();
-    let peak = 0, clicks = 0, clipped = 0; const thr = 0.25;
+    let peak = 0, clicks = 0, jumps = 0, clipped = 0; const thr = 0.25;
     for (let ch = 0; ch < buf.numberOfChannels; ch++) { const d = buf.getChannelData(ch);
       for (let i = 2; i < d.length; i++) { const a = Math.abs(d[i]); if (a > peak) peak = a; if (a >= 0.999) clipped++;
+        if (Math.abs(d[i] - d[i - 1]) > 0.05) jumps++; // sample-to-sample jump (a click at these levels)
         // click = a sample-to-sample jump far above the local slope (2nd difference)
         if (Math.abs(d[i] - 2 * d[i - 1] + d[i - 2]) > thr) clicks++; } }
     let rms = 0; { const d = buf.getChannelData(0); for (let i = 0; i < d.length; i++) rms += d[i] * d[i]; rms = Math.sqrt(rms / d.length); }
-    return { legacy: legacyMode, sec, sampleRate: SR, fireworks: fws.length, peak: +peak.toFixed(4), peakDbfs: +(20 * Math.log10(peak || 1e-9)).toFixed(2), rmsDbfs: +(20 * Math.log10(rms || 1e-9)).toFixed(2), clippedSamples: clipped, clicks2ndDiff: clicks, audioNodesPerFirework: +(fwNodes / fws.length).toFixed(1), maxSfxVoices: legacyMode ? 'uncapped' : (cfg?.maxVoices ?? 40) };
-  } finally { ({ ctx, master, musicBus, sfxBus, boostBus, windGain, windFilt, noiseBuf, crackBuf, cur, enabled, legacy, lastFw, ends } = saved); }
+    const res = { rev: AUDIO_REV, sec, sampleRate: SR, fireworks: fws.length, peak: +peak.toFixed(4), peakDbfs: +(20 * Math.log10(peak || 1e-9)).toFixed(2), rmsDbfs: +(20 * Math.log10(rms || 1e-9)).toFixed(2), clippedSamples: clipped, jumpsOver005: jumps, clicks2ndDiff: clicks, audioNodesPerFirework: +(fwNodes / fws.length).toFixed(1), maxSfxVoices: cfg?.maxVoices ?? 40 };
+    if (opts.samples) res.samples = buf.getChannelData(0);
+    return res;
+  } finally { ({ ctx, master, musicBus, sfxBus, boostBus, windGain, windFilt, noiseBuf, cur, enabled, lastFw, ends } = saved); }
 }

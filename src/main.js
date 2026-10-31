@@ -1,20 +1,20 @@
 // Santa's Block Delivery — game bootstrap, loop and state machine.
 import * as THREE from 'three';
-import { PostFX, loadEnvironment, LampCones, Footprints, SnowPuffs, ChimneySmoke, Sparkles, Shockwaves, Governor } from './fx.js';
-import { CONFIG, applyUrlOverrides, resolveQuality, difficulty, ethPerBlock, formatEth, comboMult, fmt } from './config.js';
-import { initAssets } from './assets.js';
-import { World } from './world.js';
-import { Interiors } from './interiors.js';
-import { PineSystem } from './pines.js';
-import { createSanta } from './santa.js';
-import { Input } from './input.js';
-import { HUD } from './hud.js';
-import { Snow, Particles, Flights, Fireworks } from './effects.js';
-import { makeLogoMesh, logoSVG } from './logo.js';
-import { WINDOW_WARM, WINDOW_BLUE } from './materials.js';
-import { InstanceCuller } from './lowcull.js';
-import { initAudio, sfx, music, audioState, configureAudio, audioStatus, renderEndingOffline } from './audio.js';
-import { rng, clamp, lerp, damp, angleDamp, angleDiff, glowTexture, textTexture, worldUV } from './util.js';
+import { PostFX, loadEnvironment, LampCones, Footprints, SnowPuffs, ChimneySmoke, Sparkles, Shockwaves, Governor } from './fx.js?v=4c34af6b';
+import { CONFIG, applyUrlOverrides, resolveQuality, difficulty, ethPerBlock, formatEth, comboMult, fmt } from './config.js?v=4c34af6b';
+import { initAssets } from './assets.js?v=4c34af6b';
+import { World } from './world.js?v=4c34af6b';
+import { Interiors } from './interiors.js?v=4c34af6b';
+import { PineSystem } from './pines.js?v=4c34af6b';
+import { createSanta } from './santa.js?v=4c34af6b';
+import { Input } from './input.js?v=4c34af6b';
+import { HUD } from './hud.js?v=4c34af6b';
+import { Snow, Particles, Flights, Fireworks } from './effects.js?v=4c34af6b';
+import { makeLogoMesh, logoSVG } from './logo.js?v=4c34af6b';
+import { WINDOW_WARM, WINDOW_BLUE } from './materials.js?v=4c34af6b';
+import { InstanceCuller } from './lowcull.js?v=4c34af6b';
+import { initAudio, sfx, music, audioState, configureAudio, audioStatus, renderEndingOffline } from './audio.js?v=4c34af6b';
+import { rng, clamp, lerp, damp, angleDamp, angleDiff, glowTexture, textTexture, worldUV } from './util.js?v=4c34af6b';
 
 applyUrlOverrides();
 const params = new URLSearchParams(location.search);
@@ -127,7 +127,7 @@ const G = {
   gossipBusy: false, hint: '', endingT: 0, lastTick: 0, levelObjects: [],
   combo: 0, bestCombo: 0, lastDeliverT: -1e9, boosted: 0, totalBoosted: 0,
 };
-import { Nav } from './nav.js';
+import { Nav } from './nav.js?v=4c34af6b';
 const _dbs = new THREE.Vector2();
 const player = { pos: new THREE.Vector3(), vel: new THREE.Vector3(), heading: 0, speed: 0, jy: 0, vy: 0, air: false, coyote: 0, jumpBuf: 0, sprintK: 0, holdT: 0, surfY: 0, paved: false };
 const cam = { yaw: 0, pos: new THREE.Vector3(), look: new THREE.Vector3(), dist: CONFIG.camera.distance };
@@ -1078,10 +1078,10 @@ function debugAPI() {
   return {
     G, player, CONFIG, renderer, world, santa, scene, camera, post, get hud() { return hud; }, get nav() { return nav; },
     get state() { return G.state; },
-    resolveWindows: async (rects) => { const { resolveWindows } = await import('./interiors.js'); const out = {}; for (const b of world.buildings) { if (!b.isGLB || out[b.type] || !rects[b.type]) continue; out[b.type] = resolveWindows(b.holder.children[0], b.holder, rects[b.type]); } return out; },
-    facadeShots: async (side = 0, mask = false) => { const { facadeShot } = await import('./interiors.js'); const out = {}; for (const b of world.buildings) { if (!b.isGLB || out[b.type]) continue; out[b.type] = facadeShot(b.holder.children[0], b.holder, renderer, side, 48, mask); } return out; },
+    resolveWindows: async (rects) => { const { resolveWindows } = await import('./interiors.js?v=4c34af6b'); const out = {}; for (const b of world.buildings) { if (!b.isGLB || out[b.type] || !rects[b.type]) continue; out[b.type] = resolveWindows(b.holder.children[0], b.holder, rects[b.type]); } return out; },
+    facadeShots: async (side = 0, mask = false) => { const { facadeShot } = await import('./interiors.js?v=4c34af6b'); const out = {}; for (const b of world.buildings) { if (!b.isGLB || out[b.type]) continue; out[b.type] = facadeShot(b.holder.children[0], b.holder, renderer, side, 48, mask); } return out; },
     // dev: detect lit window rects on each Tripo building type (output -> assets/windows.js)
-    detectWindows: async () => { const { detectWindows } = await import('./interiors.js'); const out = {}; for (const b of world.buildings) { if (!b.isGLB || out[b.type]) continue; const o = b.holder.children[0]; out[b.type] = detectWindows(o, b.holder, renderer); } return out; },
+    detectWindows: async () => { const { detectWindows } = await import('./interiors.js?v=4c34af6b'); const out = {}; for (const b of world.buildings) { if (!b.isGLB || out[b.type]) continue; const o = b.holder.children[0]; out[b.type] = detectWindows(o, b.holder, renderer); } return out; },
     start: (lv = 0) => { G.qaMute = true; initAudio(false); startLevel(lv); },
     input, player, G,
     completeLevel: () => { for (const tg of G.targets) deliver(tg); },
@@ -1100,6 +1100,7 @@ function debugAPI() {
     cam: (pos, look, fov, rel = false) => { G.camOverride = pos ? { pos, look, fov, rel } : null; },
     injectNaN: on => { world.sky.material.uniforms.uNaN.value = on ? 1 : 0; return true; },
     sanitize: on => { if (post.sanitize) post.sanitize.enabled = on; return on; },
+    build: new URL(import.meta.url).searchParams.get('v') || 'dev', // cache-bust stamp (tools/bump-version.mjs)
     audio: () => audioStatus(),
     audioOffline: (sec = 20, legacy = false, rate = 2.2) => renderEndingOffline(sec, legacy, rate),
     nanView: on => { post.nanView(on); return !!post.sanitize; },
