@@ -127,7 +127,7 @@ function osc(type, f, t0, dur, vol, out, { a = 0.01, dec = dur, detune = 0, slid
 }
 function noise(t0, dur, vol, out, { type = 'highpass', f = 6000, q = 0.7, a = 0.01, f2 = 0 } = {}) {
   if (!voiceOK(out, t0)) return;
-  const s = ctx.createBufferSource(); s.buffer = noiseBuf; s.playbackRate.value = 0.8 + Math.random() * 0.4;
+  const s = ctx.createBufferSource(); s.buffer = noiseBuf; s.loop = true; s.playbackRate.value = 0.8 + Math.random() * 0.4;
   const bq = ctx.createBiquadFilter(); bq.type = type; bq.frequency.setValueAtTime(f, t0); bq.Q.value = q; if (f2) bq.frequency.exponentialRampToValueAtTime(f2, t0 + dur);
   const g = ctx.createGain(), end = env(g, t0, a, vol, dur) + 0.02;
   s.connect(bq); bq.connect(g); g.connect(out); s.start(t0, Math.random() * 1.5); s.stop(end); track(end, out);
@@ -229,6 +229,17 @@ export const sfx = {
   jingle() { if (!ok()) return; const nn = [76, 76, 76, 0, 76, 76, 76, 0, 76, 79, 72, 74, 76]; const t = now(); nn.forEach((m, i) => m && V.bell(m, t + i * 0.15, 0.2, 0.12, sfxBus)); this.bells(0.6); },
   fail() { if (!ok()) return; const t = now(); tone(392, t, 0.3, 'triangle', 0.18); tone(330, t + 0.25, 0.3, 'triangle', 0.18); tone(262, t + 0.5, 0.6, 'triangle', 0.18); },
   boom() { this.firework(0.6); },
+  // stage obstacles (all through osc()/noise(): >= 8 ms attack + release ramp)
+  hit() { if (!ok()) return; const t = now(); noise(t, 0.22, 0.2, sfxBus, { type: 'lowpass', f: 900, q: 0.8, a: 0.008 }); osc('triangle', 220, t, 0.25, 0.16, sfxBus, { a: 0.008, slide: 110 }); },
+  steal() { if (!ok()) return; const t = now(); [660, 523, 392].forEach((f, i) => osc('square', f, t + i * 0.08, 0.12, 0.05, sfxBus, { a: 0.01, filter: 2200 })); },
+  honk() { if (!ok()) return; const t = now(); for (const f of [233, 294]) osc('sawtooth', f, t, 0.32, 0.045, sfxBus, { a: 0.015, filter: 1400 }); },
+  gust(v = 1) { if (!ok()) return; noise(now(), 1.2 + v * 0.8, 0.12 * v, sfxBus, { type: 'bandpass', f: 300, f2: 1400, q: 0.9, a: 0.35 }); },
+  slam() { if (!ok()) return; const t = now(); osc('sine', 90, t, 0.6, 0.3, sfxBus, { a: 0.008, slide: 38 }); noise(t, 0.5, 0.18, sfxBus, { type: 'lowpass', f: 500, q: 0.7, a: 0.01 }); },
+  roar(v = 1) { if (!ok()) return; const t = now(); osc('sawtooth', 110, t, 0.9, 0.06 * v, sfxBus, { a: 0.08, slide: 70, filter: 700 }); noise(t, 0.8, 0.07 * v, sfxBus, { type: 'bandpass', f: 380, q: 1.4, a: 0.08 }); },
+  // wardrobe: equip blip / locked thud (osc(): 10 ms attack + release ramp)
+  equip() { if (!ok()) return; const t = now(); osc('triangle', 988, t, 0.09, 0.05, sfxBus, { a: 0.01 }); osc('sine', 1319, t + 0.05, 0.14, 0.04, sfxBus, { a: 0.01 }); },
+  locked() { if (!ok()) return; const t = now(); osc('triangle', 196, t, 0.16, 0.07, sfxBus, { a: 0.01, filter: 900 }); },
+  unlock() { if (!ok()) return; const t = now(); [72, 76, 79, 84].forEach((m, i) => V.bell(m, t + i * 0.09, 0.4, 0.09, sfxBus)); this.bells(0.4); },
   // fireworks: soft rising whoosh on launch, warm low boom on burst, and (solo bursts only) a faint slow-attack
   // two-note shimmer below 2 kHz. No crackle of any kind (no pre-rendered pop buffer, no noise-grain pops).
   firework(v = 1, delay = 0) {

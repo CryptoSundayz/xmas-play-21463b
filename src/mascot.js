@@ -7,10 +7,10 @@
 //  - fur shells on the cream trim, velvet sheen on the red cloth
 import * as THREE from 'three';
 import { DecalGeometry } from 'three/addons/geometries/DecalGeometry.js';
-import { CONFIG } from './config.js?v=8fa77074';
-import { findClip } from './assets.js?v=8fa77074';
-import { MascotFace } from './mascotface.js?v=8fa77074';
-import { iconBlackShapes } from './logo.js?v=8fa77074';
+import { CONFIG } from './config.js?v=0063fe52';
+import { findClip } from './assets.js?v=0063fe52';
+import { MascotFace } from './mascotface.js?v=0063fe52';
+import { iconBlackShapes } from './logo.js?v=0063fe52';
 import { mergeVertices } from 'three/addons/utils/BufferGeometryUtils.js';
 
 /** Goggle mesh in root-local space: the official dark icon (outer contour + hollow centre) extruded with a rounded
@@ -54,13 +54,42 @@ const findBone = (model, n) => { let b = null; model.traverse(o => { if (!b && o
 // ---------------------------------------------------------------- materials
 // velvet sheen only where the albedo is red; low-saturation light pixels (face, gloves) lifted a little
 // (Tripo's delighting leaves the white head grey-ish). Shared by the face decal so the fill matches.
+// ---- wardrobe recolours: one shared uniform set (single mascot). aCos.x = boot mask, aCos.y = hat-cloth mask
+export const LOOK_U = {
+  uSuit: { value: new THREE.Color(1, 0, 0) }, uSuitOn: { value: 0 }, uHat: { value: new THREE.Color(1, 0, 0) }, uHatOn: { value: 0 },
+  uBoot: { value: new THREE.Color(0, 0, 0) }, uBootOn: { value: 0 },
+  uC0: { value: new THREE.Color() }, uC1: { value: new THREE.Color() }, uC2: { value: new THREE.Color() }, uPrism: { value: 0 }, uEC: { value: new THREE.Color() },
+  uEnvK: { value: 0.22 }, uFlameOn: { value: 0 },
+};
+// default look = the original hard-coded flame colours (linear values, set raw)
+LOOK_U.uC0.value.setRGB(0.02, 0.12, 0.6); LOOK_U.uC1.value.setRGB(0.16, 0.48, 1.05); LOOK_U.uC2.value.setRGB(0.85, 0.97, 1.1); LOOK_U.uEC.value.setRGB(0.5, 0.85, 2.2);
+const LOOK_PATCH = (s) => {
+  for (const k of ['uSuit', 'uSuitOn', 'uHat', 'uHatOn', 'uBoot', 'uBootOn', 'uC0', 'uC1', 'uC2', 'uFlameOn']) s.uniforms[k] = LOOK_U[k];
+  s.vertexShader = 'attribute vec3 aCos;\nvarying vec3 vCos;\n' + s.vertexShader.replace('#include <begin_vertex>', '#include <begin_vertex>\n  vCos = aCos;');
+  s.fragmentShader = 'varying vec3 vCos;\nuniform vec3 uSuit, uHat, uBoot, uC0, uC1, uC2;\nuniform float uSuitOn, uHatOn, uBootOn, uFlameOn;\n' + s.fragmentShader.replace('#include <map_fragment>', `#include <map_fragment>
+    { vec3 c = diffuseColor.rgb; float mx = max(c.r, max(c.g, c.b));
+      float red = clamp((c.r - max(c.g, c.b) * 1.25) * 5.0, 0.0, 1.0);
+      float hm = vCos.y; float on = mix(uSuitOn, uHatOn, hm) * (1.0 - vCos.x * uBootOn);
+      diffuseColor.rgb = mix(c, mix(uSuit, uHat, hm) * (c.r * 1.9 + 0.015), red * on);
+      float dk = (1.0 - smoothstep(0.22, 0.42, mx)) * vCos.x * uBootOn;
+      diffuseColor.rgb = mix(diffuseColor.rgb, uBoot * (0.3 + mx * 2.6), dk);
+      // flame head: blue texels on the head re-mapped onto the flame preset's gradient by brightness
+      float blu = clamp((c.b - max(c.r, c.g) * 0.92) * 5.0, 0.0, 1.0) * vCos.z * uFlameOn;
+      float L = clamp(dot(c, vec3(0.25, 0.45, 0.3)) * 1.05, 0.0, 1.0) * 0.82;
+      vec3 fc = L < 0.4 ? mix(uC0, uC1, L / 0.4) : mix(uC1, uC2, (L - 0.4) / 0.6);
+      diffuseColor.rgb = mix(diffuseColor.rgb, min(fc * 0.85, vec3(1.0)), blu);
+      // the pale face picks up a soft glow of the flame colour
+      float pale = smoothstep(0.32, 0.6, mx) * (1.0 - blu) * vCos.z * uFlameOn;
+      vec3 tn = uC1 / max(max(uC1.r, uC1.g), max(uC1.b, 0.001));
+      diffuseColor.rgb *= mix(vec3(1.0), mix(vec3(1.0), tn, 0.42), pale); }`);
+};
 const SKIN_PATCH = (shader, opts = {}) => {
   shader.fragmentShader = shader.fragmentShader.replace('#include <map_fragment>', `#include <map_fragment>
     { float mxc = max(diffuseColor.r, max(diffuseColor.g, diffuseColor.b)), mnc = min(diffuseColor.r, min(diffuseColor.g, diffuseColor.b));
       float satc = mxc > 0.0 ? (mxc - mnc) / mxc : 0.0;
       float lift = (1.0 - smoothstep(0.06, 0.16, satc)) * smoothstep(0.18, 0.3, mxc) * (1.0 - smoothstep(0.45, 0.62, mxc));
       diffuseColor.rgb *= mix(1.0, ${(opts.lift || 1.7).toFixed(2)}, lift); }`);
-  if (shader.fragmentShader.includes('#include <lights_physical_fragment>')) {
+  if (!opts.noRed && shader.fragmentShader.includes('#include <lights_physical_fragment>')) {
     shader.fragmentShader = shader.fragmentShader.replace('#include <lights_physical_fragment>', `#include <lights_physical_fragment>
       { float red = clamp((diffuseColor.r - max(diffuseColor.g, diffuseColor.b) * 1.2) * 4.0, 0.0, 1.0);
         #ifdef USE_SHEEN
@@ -72,10 +101,11 @@ const SKIN_PATCH = (shader, opts = {}) => {
 
 // scene.environment ignores material.envMapIntensity (r163+): damp the IBL per material so glossy black stays black
 const ENV_DAMP = (shader, k) => {
+  const ks = typeof k === 'string' ? k : k.toFixed(3), kc = typeof k === 'string' ? `min(1.0, ${k} * 1.6)` : (k * 1.6).toFixed(3);
   shader.fragmentShader = shader.fragmentShader.replace('#include <lights_fragment_maps>', `#include <lights_fragment_maps>
-    radiance *= ${k.toFixed(3)}; iblIrradiance *= ${k.toFixed(3)};
+    radiance *= ${ks}; iblIrradiance *= ${ks};
     #ifdef USE_CLEARCOAT
-    clearcoatRadiance *= ${(k * 1.6).toFixed(3)};
+    clearcoatRadiance *= ${kc};
     #endif`);
 };
 
@@ -84,8 +114,8 @@ function velvetMaterial(src) {
   THREE.MeshStandardMaterial.prototype.copy.call(pm, src);
   pm.metalness = 0; pm.envMapIntensity = 0.6; pm.roughness = Math.max(0.55, src.roughness);
   pm.sheen = 1; pm.sheenRoughness = 0.42; pm.sheenColor = new THREE.Color(1.0, 0.42, 0.42);
-  pm.onBeforeCompile = (s) => SKIN_PATCH(s);
-  pm.customProgramCacheKey = () => 'mascot-velvet';
+  pm.onBeforeCompile = (s) => { LOOK_PATCH(s); SKIN_PATCH(s); };
+  pm.customProgramCacheKey = () => 'mascot-velvet-look';
   return pm;
 }
 
@@ -125,7 +155,8 @@ void main(){
   gl_Position = projectionMatrix * mv;
 }`;
 const FLAME_FS = `
-uniform float uTime, uI;
+uniform float uTime, uI, uPrism;
+uniform vec3 uC0, uC1, uC2;
 varying vec2 vUv; varying float vSeed;
 float h21(vec2 p){ return fract(sin(dot(p, vec2(41.3, 289.1))) * 45758.5453); }
 float vn(vec2 p){ vec2 i = floor(p), f = fract(p); f = f * f * (3.0 - 2.0 * f);
@@ -140,8 +171,10 @@ void main(){
   shape *= 1.0 - smoothstep(0.45, 1.0, y + (n - 0.5) * 0.5);
   shape *= smoothstep(0.0, 0.08, y);
   float core = (1.0 - smoothstep(0.0, w * 0.5, abs(x))) * (1.0 - smoothstep(0.05, 0.5, y));
-  vec3 col = mix(vec3(0.02, 0.12, 0.6), vec3(0.16, 0.48, 1.05), shape * shape);
-  col = mix(col, vec3(0.85, 0.97, 1.1), core * 0.65);
+  vec3 col = mix(uC0, uC1, shape * shape);
+  col = mix(col, uC2, core * 0.65);
+  if (uPrism > 0.0) { vec3 hue = 0.5 + 0.5 * cos(6.2831 * (y * 0.9 - uTime * 0.3 + vSeed * 0.5 + vec3(0.0, 0.33, 0.67)));
+    col = mix(col, hue * (0.25 + 0.95 * shape * shape) + uC2 * core * 0.5, uPrism); }
   float a = shape * uI * (0.55 + 0.45 * n);
   if (a < 0.004) discard;
   gl_FragColor = vec4(col, a);
@@ -159,7 +192,7 @@ function makeFlame(anchors, sizes, height) {
   const geo = new THREE.BufferGeometry();
   geo.setAttribute('position', new THREE.BufferAttribute(pos, 3)); geo.setAttribute('aCorner', new THREE.BufferAttribute(cor, 4)); geo.setIndex(idx);
   const mat = new THREE.ShaderMaterial({
-    uniforms: { uTime: { value: 0 }, uH: { value: height }, uI: { value: 1 } }, vertexShader: FLAME_VS, fragmentShader: FLAME_FS,
+    uniforms: { uTime: { value: 0 }, uH: { value: height }, uI: { value: 1 }, uC0: LOOK_U.uC0, uC1: LOOK_U.uC1, uC2: LOOK_U.uC2, uPrism: LOOK_U.uPrism }, vertexShader: FLAME_VS, fragmentShader: FLAME_FS,
     transparent: true, depthWrite: false, blending: THREE.AdditiveBlending, side: THREE.DoubleSide,
   });
   const mesh = new THREE.Mesh(geo, mat); mesh.frustumCulled = false; mesh.renderOrder = 5; mesh.name = 'mascotFlame';
@@ -171,9 +204,9 @@ class Embers {
     this.n = n; this.p = new Float32Array(n * 3); this.life = new Float32Array(n); this.vel = new Float32Array(n * 3); this.al = new Float32Array(n);
     const g = new THREE.BufferGeometry(); g.setAttribute('position', new THREE.BufferAttribute(this.p, 3)); g.setAttribute('aA', new THREE.BufferAttribute(this.al, 1));
     this.mat = new THREE.ShaderMaterial({
-      uniforms: { uS: { value: 70 } }, transparent: true, depthWrite: false, blending: THREE.AdditiveBlending,
+      uniforms: { uS: { value: 70 }, uEC: LOOK_U.uEC }, transparent: true, depthWrite: false, blending: THREE.AdditiveBlending,
       vertexShader: 'attribute float aA; varying float vA; uniform float uS; void main(){ vA = aA; vec4 mv = modelViewMatrix * vec4(position,1.0); gl_PointSize = uS * (0.4 + aA * 0.6) / -mv.z; gl_Position = projectionMatrix * mv; }',
-      fragmentShader: 'varying float vA; void main(){ float d = length(gl_PointCoord - 0.5); float a = smoothstep(0.5, 0.0, d) * vA; if (a < 0.01) discard; gl_FragColor = vec4(mix(vec3(0.5,0.85,2.2), vec3(2.2,2.4,2.6), smoothstep(0.25,0.0,d)), a); }',
+      fragmentShader: 'uniform vec3 uEC; varying float vA; void main(){ float d = length(gl_PointCoord - 0.5); float a = smoothstep(0.5, 0.0, d) * vA; if (a < 0.01) discard; gl_FragColor = vec4(mix(uEC, vec3(2.2,2.4,2.6), smoothstep(0.25,0.0,d)), a); }',
     });
     this.points = new THREE.Points(g, this.mat); this.points.frustumCulled = false; this.points.name = 'mascotEmbers';
     for (let i = 0; i < n; i++) this.life[i] = -Math.random();
@@ -228,6 +261,21 @@ export function glbMascot(root, glb, entry, gift, makeCarryIK, quality = 'high')
     }
     info.push({ mesh, P, K, Hd, n, headIdx });
   }
+  // ---- wardrobe masks: aCos.x = boots (lowest ~11% of the body, outside the head), aCos.y = hat cloth (head-bound red / fur)
+  const bodyB = new THREE.Box3();
+  for (const I of info) for (let i = 0; i < I.n; i++) if (!I.Hd[i]) bodyB.expandByPoint(v0.fromArray(I.P, i * 3));
+  {
+    const y0 = bodyB.min.y, H = bodyB.max.y - y0;
+    for (const I of info) {
+      const a = new Float32Array(I.n * 3);
+      for (let i = 0; i < I.n; i++) {
+        a[i * 3] = I.Hd[i] ? 0 : 1 - THREE.MathUtils.smoothstep(I.P[i * 3 + 1] - y0, H * 0.13, H * 0.17);
+        a[i * 3 + 1] = I.Hd[i] && (I.K[i] === CLS.RED || I.K[i] === CLS.FUR) ? 1 : 0;
+        a[i * 3 + 2] = I.Hd[i] && !a[i * 3 + 1] ? 1 : 0;
+      }
+      I.mesh.geometry.setAttribute('aCos', new THREE.BufferAttribute(a, 3));
+    }
+  }
   // head stats: face (non red/fur head verts) bounds, mask band bounds
   const hb = new THREE.Box3(), band = new THREE.Box3(), hat = new THREE.Box3(); let frontZ = -1e9;
   for (const I of info) for (let i = 0; i < I.n; i++) {
@@ -247,6 +295,22 @@ export function glbMascot(root, glb, entry, gift, makeCarryIK, quality = 'high')
   if (band.isEmpty()) { band.min.set(hc.x - hs.x * 0.35, hc.y - hs.y * 0.12, 0); band.max.set(hc.x + hs.x * 0.35, hc.y + hs.y * 0.08, frontZ); }
   const bandC = band.getCenter(new THREE.Vector3()), bandS = band.getSize(new THREE.Vector3());
   const api = { model, lean, squash, head, mixer: null, faceName: 'neutral' };
+  { // wardrobe slots: groups on the head / upper-spine bones whose children are authored in root-local rest-pose metres
+    const mkSlot = (bone, name) => {
+      const g = new THREE.Group(); g.name = name; bone.updateMatrixWorld(true);
+      new THREE.Matrix4().copy(bone.matrixWorld).invert().multiply(root.matrixWorld).decompose(g.position, g.quaternion, g.scale);
+      bone.add(g); return g;
+    };
+    const H = bodyB.max.y - bodyB.min.y, backY = bodyB.min.y + (hb.min.y - bodyB.min.y) * 0.62; let backZ = 1e9;
+    for (const I of info) for (let i = 0; i < I.n; i++) {
+      if (I.Hd[i]) continue; const x = I.P[i * 3], y = I.P[i * 3 + 1], z = I.P[i * 3 + 2];
+      if (Math.abs(y - backY) < H * 0.05 && Math.abs(x - hc.x) < hs.x * 0.3) backZ = Math.min(backZ, z);
+    }
+    if (backZ > 1e8) backZ = bodyB.min.z;
+    api.slots = { head: mkSlot(head, 'mascotHeadSlot'), back: mkSlot(spine2 || neck || head, 'mascotBackSlot') };
+    api.lookRef = { hc: hc.clone(), hs: hs.clone(), hat: hat.clone(), hb: hb.clone(), body: bodyB.clone(), frontZ, back: new THREE.Vector3(hc.x, backY, backZ) };
+    api.lookU = LOOK_U;
+  }
   api.analysis = () => {
     const hist = {}; const r = (x) => Math.round(x * 100) / 100;
     for (const I of info) for (let i = 0; i < I.n; i++) {
@@ -299,7 +363,8 @@ export function glbMascot(root, glb, entry, gift, makeCarryIK, quality = 'high')
       const gg = buildGoggle({ proxy, lx, ly, k, frontZ, hc });
       gg.applyMatrix4(toHead);
       const gm = new THREE.MeshPhysicalMaterial({ color: 0x030304, roughness: 0.3, metalness: 0.0, clearcoat: 0.9, clearcoatRoughness: 0.06, specularIntensity: 0.6, envMapIntensity: 0.3 });
-      gm.onBeforeCompile = (s) => { SKIN_PATCH(s); ENV_DAMP(s, 0.22); }; gm.customProgramCacheKey = () => 'mascot-goggle';
+      gm.onBeforeCompile = (s) => { SKIN_PATCH(s, { noRed: true }); s.uniforms.uEnvK = LOOK_U.uEnvK; s.fragmentShader = 'uniform float uEnvK;\n' + s.fragmentShader; ENV_DAMP(s, 'uEnvK'); };
+      gm.customProgramCacheKey = () => 'mascot-goggle-look';
       const gmesh = new THREE.Mesh(gg, gm); gmesh.name = 'mascotGoggle'; gmesh.renderOrder = 3; gmesh.castShadow = false;
       head.add(gmesh); api.goggle = gmesh;
       // QA: world-space points of the official icon outline as placed on the head (for overlay checks)

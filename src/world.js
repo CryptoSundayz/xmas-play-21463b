@@ -1,20 +1,20 @@
 // Village generation: ground, sky, roads, square, lake, buildings, lamps, forest, colliders, light pool.
 import * as THREE from 'three';
 import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
-import { CONFIG } from './config.js?v=8fa77074';
-import { rng, worldUV, glowTexture, textTexture } from './util.js?v=8fa77074';
-import { materials, windowMaterial, WINDOW_WARM, cloneTex } from './materials.js?v=8fa77074';
-import { buildProcedural, BUILDING_WEIGHTS } from './buildings.js?v=8fa77074';
-import { pineGeometry, lampGeometries, christmasTree, snowman, bench, giftPile, sleigh, reindeer } from './props.js?v=8fa77074';
-import { MANIFEST, instantiate, bakedMeshes, addTextureGlow } from './assets.js?v=8fa77074';
-import { makeLogoMesh } from './logo.js?v=8fa77074';
-import { findChimney } from './fx.js?v=8fa77074';
-import { WINDOWS, DOORS, SIGNS } from '../assets/windows.js?v=8fa77074';
-import { SurfaceBVH, SurfaceField, rayGap } from './attach.js?v=8fa77074';
-import { buildShopSign } from './signs.js?v=8fa77074';
+import { CONFIG } from './config.js?v=0063fe52';
+import { rng, worldUV, glowTexture, textTexture } from './util.js?v=0063fe52';
+import { materials, windowMaterial, WINDOW_WARM, cloneTex } from './materials.js?v=0063fe52';
+import { buildProcedural, BUILDING_WEIGHTS } from './buildings.js?v=0063fe52';
+import { pineGeometry, lampGeometries, christmasTree, snowman, bench, giftPile, sleigh, reindeer } from './props.js?v=0063fe52';
+import { MANIFEST, instantiate, bakedMeshes, addTextureGlow } from './assets.js?v=0063fe52';
+import { makeLogoMesh } from './logo.js?v=0063fe52';
+import { findChimney } from './fx.js?v=0063fe52';
+import { WINDOWS, DOORS, SIGNS } from '../assets/windows.js?v=0063fe52';
+import { SurfaceBVH, SurfaceField, rayGap } from './attach.js?v=0063fe52';
+import { buildShopSign } from './signs.js?v=0063fe52';
 const attachCache = new Map(), lightCache = new Map();
-import { smoothIco, snowBlend, snowSparkle, snowmanVariant, houseDecor, fenceGarland, fbm, hash2, attachedWreath, attachedGarland } from './xmasdeco.js?v=8fa77074';
-import { buildTerrain, conformDecals, makeTracks } from './terrain.js?v=8fa77074';
+import { smoothIco, snowBlend, snowSparkle, snowmanVariant, houseDecor, fenceGarland, fbm, hash2, attachedWreath, attachedGarland } from './xmasdeco.js?v=0063fe52';
+import { buildTerrain, conformDecals, makeTracks } from './terrain.js?v=0063fe52';
 const chimneyCache = new Map();
 const eaveCache = new Map();
 const NO_STRING_LIGHTS = new Set(['windmill', 'church']);
@@ -1410,8 +1410,10 @@ export class World {
   /** push a circle (x,z,r) out of colliders; returns corrected {x,z} */
   collide(pos, r, feetY = 0) {
     for (let it = 0; it < 2; it++) {
-      const list = this.query(pos.x, pos.z);
-      for (const c of list) {
+      const list = this.query(pos.x, pos.z), dyn = this.dyn;
+      for (let li = 0, ln = list.length + (dyn ? dyn.length : 0); li < ln; li++) {
+        const c = li < list.length ? list[li] : dyn[li - list.length]; // static grid + per-stage obstacles (fences, barriers)
+        if (c.dyn && (Math.abs(pos.x - c.x) > c.hw + r + 1 || Math.abs(pos.z - c.z) > c.hw + r + 1)) continue;
         if (feetY > 0 && feetY >= (c.h ?? Infinity)) continue; // jumping over a low prop (fence, bench, sled)
         if (c.kind === 'c') {
           const dx = pos.x - c.x, dz = pos.z - c.z; const d = Math.hypot(dx, dz); const m = c.r + r;

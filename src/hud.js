@@ -1,6 +1,6 @@
 // DOM HUD: score, Gossip vs Optimum comparison, timer, minimap, power-up status.
-import { CONFIG, formatEth, fmt } from './config.js?v=8fa77074';
-import { logoSVG } from './logo.js?v=8fa77074';
+import { CONFIG, formatEth, fmt } from './config.js?v=0063fe52';
+import { logoSVG } from './logo.js?v=0063fe52';
 
 const $ = id => document.getElementById(id);
 
@@ -65,7 +65,7 @@ export class HUD {
     const t = Math.max(0, s.timer); const m = Math.floor(t / 60), sec = Math.floor(t % 60);
     $('timerVal').textContent = `${m}:${sec.toString().padStart(2, '0')}`;
     $('hudTimer').classList.toggle('low', t < 15);
-    $('levelName').textContent = `Level ${s.level + 1} · ${s.levelName}`;
+    $('levelName').textContent = `Stage ${s.level + 1} · ${s.levelName}`;
     $('timerSub').textContent = s.bonusFlash > 0 ? `+${CONFIG.delivery.timerBonus}s block bonus` : '';
     // comparison
     $('rowGossip').classList.toggle('active', !s.mump);
@@ -104,6 +104,23 @@ export class HUD {
     }
     el.querySelector('.cb-bar i').style.width = (100 * frac).toFixed(1) + '%';
   }
+  /** wind gust warning: arrow (screen-relative) showing where the gust will shove Santa */
+  gust(G, camYaw, show) {
+    const el = $('gust'); if (!el) return;
+    const on = show && (G.warn || G.k > 0.05);
+    if (on !== this._gustOn) { el.classList.toggle('show', !!on); this._gustOn = on; }
+    if (!on) return;
+    const th = camYaw - Math.PI, cx = G.x * Math.cos(th) - G.z * Math.sin(th), cy = G.x * Math.sin(th) + G.z * Math.cos(th);
+    el.querySelector('i').style.transform = `rotate(${Math.atan2(cx, -cy).toFixed(3)}rad)`;
+    el.classList.toggle('warn', !!G.warn);
+  }
+  status(s) {
+    const el = $('hudStatus'); if (!el) return;
+    const key = (s.lag ? 'L' : '') + (s.steal ? 'S' : '');
+    if (key === this._stKey) return; this._stKey = key;
+    el.innerHTML = (s.lag ? '<span class="lag">LAG +300 ms</span>' : '') + (s.steal ? '<span class="steal">⏱ time stolen!</span>' : '');
+    el.classList.toggle('show', !!key);
+  }
   toast(text, dur = 1.8) { const t = $('toast'); t.textContent = text; t.classList.add('show'); this.toastT = dur; }
 
   drawMinimap(s) {
@@ -120,8 +137,22 @@ export class HUD {
     g.strokeStyle = 'rgba(143,220,255,.25)'; g.lineWidth = 1.5; g.setLineDash([4, 4]);
     g.beginPath(); g.arc(...toM(0, 0), s.areaRadius * sc, 0, 7); g.stroke(); g.setLineDash([]);
     if (s.mump) { g.strokeStyle = 'rgba(58,160,255,.6)'; g.lineWidth = 2; g.beginPath(); g.arc(0, 0, CONFIG.powerup.shardRadius * sc, 0, 7); g.stroke(); }
+    if (s.areaMin > 22) { g.strokeStyle = 'rgba(143,220,255,.18)'; g.lineWidth = 1.5; g.setLineDash([2, 5]); g.beginPath(); g.arc(...toM(0, 0), s.areaMin * sc, 0, 7); g.stroke(); g.setLineDash([]); }
     // ice
     g.fillStyle = 'rgba(190,235,255,.55)'; for (const p of s.ice) { g.beginPath(); g.arc(...toM(p.x, p.z), p.r * sc, 0, 7); g.fill(); }
+    // stage obstacles: fences (brown bar), road blocks (red/white bar), lag zones (purple), plows / grinches / boss (dots)
+    for (const m of s.marks || []) {
+      const [x, y] = toM(m.x, m.z); if (Math.hypot(x, y) > half + 12) continue;
+      if (m.t === 'fence' || m.t === 'barrier') {
+        const L = (m.t === 'fence' ? 5 : 6) * sc + 3, ux = m.nx * L, uy = m.nz * L;
+        g.lineCap = 'round'; g.lineWidth = m.t === 'fence' ? 3 : 4.5; g.strokeStyle = m.t === 'fence' ? '#c98a4e' : '#ff3b3b';
+        g.beginPath(); g.moveTo(x - ux, y - uy); g.lineTo(x + ux, y + uy); g.stroke();
+        if (m.t === 'barrier') { g.lineWidth = 2; g.strokeStyle = '#fff'; g.setLineDash([3, 3]); g.beginPath(); g.moveTo(x - ux, y - uy); g.lineTo(x + ux, y + uy); g.stroke(); g.setLineDash([]); }
+        g.lineCap = 'butt';
+      } else if (m.t === 'lag') { g.fillStyle = 'rgba(190,90,255,.33)'; g.beginPath(); g.arc(x, y, m.r * sc, 0, 7); g.fill(); }
+      else { const c = m.t === 'plow' ? '#ffb020' : m.t === 'boss' ? '#ff2d6a' : '#54e04a', r = m.t === 'boss' ? 6.5 : 4;
+        g.fillStyle = c; g.strokeStyle = '#111'; g.lineWidth = 1.5; g.beginPath(); g.arc(x, y, r, 0, 7); g.fill(); g.stroke(); }
+    }
     // targets: undelivered pulse, delivered = green check; dotted path to the nearest open house
     const pulse = 0.6 + 0.4 * Math.sin(performance.now() / 180), NV = CONFIG.nav || {};
     let near = null, nd = 1e9;
@@ -142,8 +173,8 @@ export class HUD {
         continue;
       }
       const r = t.delivered ? 3.5 : (off ? 4.5 : 6) * (t === near ? 1 + 0.25 * pulse : 1);
-      if (!t.delivered && !off) { g.fillStyle = t.slow ? `rgba(255,190,80,${0.25 * pulse})` : `rgba(63,182,255,${0.25 * pulse})`; g.beginPath(); g.arc(x, y, r + 4 + 3 * pulse, 0, 7); g.fill(); }
-      g.fillStyle = t.delivered ? '#3dff9a' : (t.slow ? `rgba(255,190,80,${pulse})` : `rgba(63,182,255,${pulse})`);
+      if (!t.delivered && !off) { g.fillStyle = t.slow ? `rgba(255,190,80,${0.25 * pulse})` : t.chimney ? `rgba(255,205,70,${0.25 * pulse})` : `rgba(63,182,255,${0.25 * pulse})`; g.beginPath(); g.arc(x, y, r + 4 + 3 * pulse, 0, 7); g.fill(); }
+      g.fillStyle = t.delivered ? '#3dff9a' : (t.slow ? `rgba(255,190,80,${pulse})` : t.chimney ? `rgba(255,212,80,${pulse})` : `rgba(63,182,255,${pulse})`);
       g.beginPath(); g.arc(x, y, r, 0, 7); g.fill();
       if (!t.delivered && !off) { g.strokeStyle = '#fff'; g.lineWidth = 1.5; g.stroke(); }
     }

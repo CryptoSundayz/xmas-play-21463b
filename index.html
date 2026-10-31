@@ -12,7 +12,7 @@
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
 <meta name="apple-mobile-web-app-title" content="Block Delivery" />
 <link rel="apple-touch-icon" href="assets/icons/apple-touch-icon.png" />
-<link rel="stylesheet" href="style.css?v=8fa77074" />
+<link rel="stylesheet" href="style.css?v=0063fe52" />
 <script type="importmap">
 { "imports": { "three": "./vendor/three/three.module.js", "three/addons/": "./vendor/three/addons/", "three-mesh-bvh": "./vendor/three-mesh-bvh/index.module.js" } }
 </script>
@@ -46,6 +46,9 @@
   <div id="toast"></div>
   <div id="boostCallout"><div class="bc-main"></div><div class="bc-sub"></div></div>
   <div id="combo"><div class="cb-main"></div><div class="cb-sub"></div><div class="cb-bar"><i></i></div></div>
+  <div id="gust"><i>➜</i><span>GUST</span></div>
+  <div id="hudStatus"></div>
+  <div id="intro" class="hidden"></div>
   <div id="stormWarn">❄ SNOWSTORM — visibility low</div>
   <div id="holdHint"></div>
   <button id="pauseBtn" title="Pause">II</button>
@@ -74,7 +77,8 @@
       <div><b>Jump</b> Space · JUMP button (clears fences)</div>
       <div><b>Camera</b> drag mouse / swipe · Q/E</div>
       <div><b>Deliver</b> stand at a <span class="blue">blue-marked</span> door</div>
-      <div><b>Watch out</b> snowstorms, ice, flickering slow nodes</div>
+      <div><b>Chimneys</b> <span class="gold">gold</span> houses: jump at the door</div>
+      <div><b>16 stages</b> ice, fences, plows, snowballs, lag, grinches…</div>
       <div><b>Pause</b> P / Esc</div>
     </div>
     <div class="opts">
@@ -82,8 +86,37 @@
       <label>Quality <select id="selQuality"><option value="auto">Auto</option><option value="low">Low</option><option value="medium">Medium</option><option value="high">High</option></select></label>
     </div>
     <button id="playBtn" class="cta">Start delivering</button>
-    <button id="fsBtnTitle" class="ghost hidden">⛶ Fullscreen</button>
+    <div class="menuRow"><button id="stagesBtn" class="ghost">🗺 Stages</button><button id="wardBtn" class="ghost">🎅 Wardrobe<b id="wardNew" class="newDot hidden"></b></button><button id="lbBtn" class="ghost">🏆 Leaderboard</button><button id="fsBtnTitle" class="ghost hidden">⛶ Fullscreen</button></div>
     <div class="foot" id="titleFoot">Target: 3M+ ETH staked</div>
+  </div>
+</div>
+
+<div id="wardrobe" class="screen hidden">
+  <div class="wardPanel">
+    <div class="wardHead"><h1>Wardrobe</h1><span id="wardCount"></span><button id="wardBack" class="ghost">◀ Back</button></div>
+    <div id="wardTabs"></div>
+    <div id="wardInfo"></div>
+    <div id="wardGrid"></div>
+  </div>
+</div>
+<div id="unlockToasts"></div>
+<div id="board" class="screen hidden">
+  <div class="card boardCard">
+    <div class="bdHead"><h1>Leaderboard</h1><button id="bdBack" class="ghost">◀ Back</button></div>
+    <div id="bdNote" class="hidden"></div>
+    <div id="bdTabs"></div>
+    <div id="bdSub"></div>
+    <div id="bdMe"></div>
+    <ol id="bdList"></ol>
+    <form id="bdName" autocomplete="off"><label for="bdNameIn">Your name</label><input id="bdNameIn" maxlength="16" spellcheck="false" enterkeyhint="done"><button class="ghost" type="submit">Save</button><span id="bdNameMsg"></span></form>
+  </div>
+</div>
+<div id="stages" class="screen hidden">
+  <div class="card stagesCard">
+    <h1>Choose a stage</h1>
+    <div class="stSub" id="stSub"></div>
+    <div id="stageGrid"></div>
+    <div class="btns"><button id="stBack" class="ghost">◀ Back</button></div>
   </div>
 </div>
 
@@ -92,6 +125,10 @@
     <h1 id="ovTitle">Level complete</h1>
     <p id="ovText"></p>
     <div id="ovStats"></div>
+    <div id="ovCard" class="hidden">
+      <img id="ovCardImg" alt="Your score card" title="Tap to enlarge" />
+      <div class="cardBtns"><button id="cardDl" class="ghost">⬇ Download PNG</button><button id="cardShare" class="ghost">⇪ Share</button><button id="cardX" class="ghost">𝕏 Post on X</button></div>
+    </div>
     <div class="btns"><button id="ovBtn" class="cta">Next level</button><button id="ovBtn2" class="ghost hidden">Title</button></div>
   </div>
 </div>
@@ -100,8 +137,10 @@
   <div class="endLogo" id="endLogo"></div>
   <h1 id="endText">This is Optimum</h1>
   <p id="endSub"></p>
-  <button id="endBtn" class="cta">Play again</button>
+  <button id="endBtn" class="cta">Play again</button> <button id="endCardBtn" class="ghost hidden" style="pointer-events:auto">🎴 Score card</button>
 </div>
+
+<div id="cardView" class="hidden"><img alt="Score card" /></div>
 
 <div id="iosTip" class="hidden"><b>Play fullscreen:</b> tap <span class="shareIco">⎋</span> Share → <b>Add to Home Screen</b>, then open it from your home screen. <button id="iosTipX" aria-label="Close">✕</button></div>
 <div id="rotateHint" class="hidden"><div class="rotIco">⟳</div>Rotate your phone to landscape for the best view<button id="rotateX">Play in portrait</button></div>
@@ -125,6 +164,6 @@
   window.addEventListener('unhandledrejection', function (e) { var r = e.reason; window.__toast('Promise: ' + (r && (r.message || r)) ); });
 })();
 </script>
-<script type="module" src="src/main.js?v=8fa77074"></script>
+<script type="module" src="src/main.js?v=0063fe52"></script>
 </body>
 </html>

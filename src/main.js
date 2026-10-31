@@ -1,20 +1,27 @@
 // Santa's Block Delivery — game bootstrap, loop and state machine.
 import * as THREE from 'three';
-import { PostFX, loadEnvironment, LampCones, Footprints, SnowPuffs, ChimneySmoke, Sparkles, Shockwaves, Governor } from './fx.js?v=8fa77074';
-import { CONFIG, applyUrlOverrides, resolveQuality, difficulty, ethPerBlock, formatEth, comboMult, fmt } from './config.js?v=8fa77074';
-import { initAssets } from './assets.js?v=8fa77074';
-import { World } from './world.js?v=8fa77074';
-import { Interiors } from './interiors.js?v=8fa77074';
-import { PineSystem } from './pines.js?v=8fa77074';
-import { createSanta } from './santa.js?v=8fa77074';
-import { Input } from './input.js?v=8fa77074';
-import { HUD } from './hud.js?v=8fa77074';
-import { Snow, Particles, Flights, Fireworks } from './effects.js?v=8fa77074';
-import { makeLogoMesh, logoSVG } from './logo.js?v=8fa77074';
-import { WINDOW_WARM, WINDOW_BLUE } from './materials.js?v=8fa77074';
-import { InstanceCuller } from './lowcull.js?v=8fa77074';
-import { initAudio, sfx, music, audioState, configureAudio, audioStatus, renderEndingOffline } from './audio.js?v=8fa77074';
-import { rng, clamp, lerp, damp, angleDamp, angleDiff, glowTexture, textTexture, worldUV } from './util.js?v=8fa77074';
+import { PostFX, loadEnvironment, LampCones, Footprints, SnowPuffs, ChimneySmoke, Sparkles, Shockwaves, Governor } from './fx.js?v=0063fe52';
+import { CONFIG, applyUrlOverrides, resolveQuality, difficulty, ethPerBlock, formatEth, comboMult, fmt } from './config.js?v=0063fe52';
+import { initAssets } from './assets.js?v=0063fe52';
+import { World } from './world.js?v=0063fe52';
+import { Interiors } from './interiors.js?v=0063fe52';
+import { PineSystem } from './pines.js?v=0063fe52';
+import { createSanta } from './santa.js?v=0063fe52';
+import { Input } from './input.js?v=0063fe52';
+import { HUD } from './hud.js?v=0063fe52';
+import { Snow, Particles, Flights, Fireworks } from './effects.js?v=0063fe52';
+import { makeLogoMesh, logoSVG } from './logo.js?v=0063fe52';
+import { WINDOW_WARM, WINDOW_BLUE } from './materials.js?v=0063fe52';
+import { InstanceCuller } from './lowcull.js?v=0063fe52';
+import { initAudio, sfx, music, audioState, configureAudio, audioStatus, renderEndingOffline } from './audio.js?v=0063fe52';
+import { progress, starsFor, titleFor } from './progress.js?v=0063fe52';
+import { drawScoreCard, showCardUI, hideCardUI } from './scorecard.js?v=0063fe52';
+import { cosmetics, SLOTS, ITEMS, BY_ID } from './cosmetics.js?v=0063fe52';
+import { applyLook, Trail } from './costume.js?v=0063fe52';
+import { createLeaderboard, NAME_MAX } from './leaderboard.js?v=0063fe52';
+import { Obstacles, planStage, routeCheck } from './obstacles.js?v=0063fe52';
+import { RouteGraph } from './routegraph.js?v=0063fe52';
+import { rng, clamp, lerp, damp, angleDamp, angleDiff, glowTexture, textTexture, worldUV } from './util.js?v=0063fe52';
 
 applyUrlOverrides();
 const params = new URLSearchParams(location.search);
@@ -122,6 +129,7 @@ const governor = new Governor(!Q.auto || QA_FIXED_EARLY ? [] : [
 const fxs = {};
 
 // ------------------------------------------------------------ globals
+let trail;
 let nav, pines, world, santa, input, hud, snow, particles, fireworksParticles, flights, fireworks, giftLight, giftHalo, shardOrbit, boostTrail, interiors;
 const G = {
   state: 'loading', level: 0, timer: 0, score: 0, levelStartScore: 0, levelTime: 0, total: 0, delivered: 0,
@@ -129,11 +137,12 @@ const G = {
   gossipBusy: false, hint: '', endingT: 0, lastTick: 0, levelObjects: [],
   combo: 0, bestCombo: 0, lastDeliverT: -1e9, boosted: 0, totalBoosted: 0,
 };
-import { Nav } from './nav.js?v=8fa77074';
+import { Nav } from './nav.js?v=0063fe52';
 const _dbs = new THREE.Vector2();
 const player = { pos: new THREE.Vector3(), vel: new THREE.Vector3(), heading: 0, speed: 0, jy: 0, vy: 0, air: false, coyote: 0, jumpBuf: 0, sprintK: 0, holdT: 0, surfY: 0, paved: false };
 const cam = { yaw: 0, pos: new THREE.Vector3(), look: new THREE.Vector3(), dist: CONFIG.camera.distance };
 const perf = { frames: [], last: performance.now() };
+let graph = null, obstacles = null; // stage road graph (route check) + stage obstacles
 
 // ------------------------------------------------------------ boot
 async function boot() {
@@ -158,6 +167,8 @@ async function boot() {
   if (CONFIG.interiors?.enabled !== false) { try { interiors = new Interiors(world, scene, Q.name, CONFIG.interiors); } catch (e) { console.warn('[interiors] disabled:', e); } }
   santa = createSanta(Q.name); scene.add(santa.root);
   santa.root.traverse(o => { if (o.isMesh && !o.name.startsWith('mascot')) o.castShadow = true; });
+  cosmetics.check(); // record already-earned items silently (toasts are only for unlocks earned in a run)
+  applyLook(santa, cosmetics.look());
   giftLight = new THREE.PointLight(0x3f9dff, 5, 9, 2); scene.add(giftLight);
   // soft additive halo so the carried gift reads from the chase camera
   giftHalo = new THREE.Sprite(new THREE.SpriteMaterial({ map: glowTexture(), color: 0x4aa8ff, transparent: true, opacity: 0.35, depthTest: false, depthWrite: false, blending: THREE.AdditiveBlending, fog: false }));
@@ -165,6 +176,8 @@ async function boot() {
   input = new Input(canvas); input.onPause = togglePause;
   hud = new HUD(world);
   nav = new Nav(scene);
+  graph = new RouteGraph(world.roads, CONFIG.world.squareRadius);
+  obstacles = new Obstacles(scene, world, { onHit: hitPlayer, onEvent: obstacleEvent });
   // layered snow: main fall, far fine dust, near soft "bokeh" flakes
   snow = new Snow(scene, Q.snowCount);
   fxs.snowLayers = [];
@@ -186,6 +199,7 @@ async function boot() {
   fxs.waves = new Shockwaves(scene);
   if (Q.name === 'low') applyLow(true);
   particles = new Particles(scene, 2500, 0.35);
+  trail = new Trail(scene, particles, Q.name);
   fireworksParticles = new Particles(scene, 7000, 0.9);
   flights = new Flights(scene, particles);
   flights.onImpact = (p) => fxs.waves.spawn(p.clone().setY(0), 3.2, 0.55, 0x6fd0ff);
@@ -250,26 +264,172 @@ function bindUI() {
   $('playBtn').onclick = () => {
     const q = $('selQuality').value;
     CONFIG.difficulty = $('selDifficulty').value;
-    if (q !== CONFIG.quality) { // quality affects world build -> reload with param
-      const u = new URL(location.href); u.searchParams.set('quality', q); u.searchParams.set('difficulty', CONFIG.difficulty); u.searchParams.set('autostart', '1'); location.href = u.toString(); return;
+    if (q !== CONFIG.quality) { // quality affects world build -> reload with param (keeps the chosen stage)
+      const u = new URL(location.href); u.searchParams.set('quality', q); u.searchParams.set('level', chosenStage() + 1); u.searchParams.set('difficulty', CONFIG.difficulty); u.searchParams.set('autostart', '1'); location.href = u.toString(); return;
     }
+    const lv = chosenStage();
     initAudio(CONFIG.audio);
-    const lv = clamp((parseInt(params.get('level')) || 1) - 1, 0, CONFIG.levels.length - 1);
     G.score = CONFIG.levels.slice(0, lv).reduce((s, l) => s + l.validators, 0) * ethPerBlock();
     hud.displayScore = G.score;
     startLevel(lv);
   };
+  $('stagesBtn').onclick = () => { renderStages(); $('title').classList.add('hidden'); $('stages').classList.remove('hidden'); };
+  $('stBack').onclick = () => { $('stages').classList.add('hidden'); $('title').classList.remove('hidden'); };
+  $('wardBtn').onclick = openWardrobe; $('wardBack').onclick = closeWardrobe; bindWardrobeDrag(); updateWardDot();
+  $('lbBtn').onclick = openBoard; $('bdBack').onclick = closeBoard; bindBoard();
+  if (params.get('unlock') === 'all' && (params.get('qa') || DEBUG)) progress.unlockAll(CONFIG.levels.length);
+  updatePlayLabel();
   $('pauseBtn').onclick = togglePause;
   bindAudioUI(); bindScreenUI();
-  $('endBtn').onclick = () => { $('ending').classList.add('hidden'); G.score = 0; G.totalBoosted = 0; hud.displayScore = 0; resetVillageLights(); startLevel(0); };
+  $('endBtn').onclick = () => { $('ending').classList.add('hidden'); $('endCardBtn').classList.add('hidden'); hideOverlay(); G.score = 0; G.totalBoosted = 0; hud.displayScore = 0; resetVillageLights(); startLevel(0); };
   if (params.get('autostart')) setTimeout(() => $('playBtn').click(), 50);
+}
+
+// ---- leaderboard screen: overall + per-stage top 50, your rank, name entry
+const BD = { board: 'all', seq: 0 };
+const esc = (t) => String(t).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+const fmtT = (t) => { t = +t || 0; const m = Math.floor(t / 60); return m ? `${m}:${String(Math.floor(t % 60)).padStart(2, '0')}` : `${t.toFixed(1)}s`; };
+function openBoard(board) {
+  if (typeof board === 'number' || board === 'all') BD.board = board;
+  $('title').classList.add('hidden'); $('board').classList.remove('hidden');
+  $('bdNameIn').value = lb.name; $('bdNameMsg').textContent = ''; renderBoard();
+}
+function closeBoard() { $('board').classList.add('hidden'); $('title').classList.remove('hidden'); }
+function bindBoard() {
+  $('bdNameIn').maxLength = NAME_MAX;
+  for (const ev of ['keydown', 'keyup']) $('bdNameIn').addEventListener(ev, e => e.stopPropagation()); // typing must not jump / pause / mute
+  $('bdName').onsubmit = async (e) => {
+    e.preventDefault(); const msg = $('bdNameMsg'); msg.className = ''; msg.textContent = '…';
+    const r = await lb.setName($('bdNameIn').value);
+    msg.className = r.ok ? 'ok' : 'bad'; msg.textContent = r.ok ? (r.offline ? 'Saved on this device' : 'Saved ✓') : r.why;
+    if (r.ok) { $('bdNameIn').value = r.name; renderBoard(); }
+  };
+}
+async function renderBoard() {
+  const n = CONFIG.levels.length, b = BD.board, seq = ++BD.seq;
+  $('bdTabs').innerHTML = `<button data-b="all" class="${b === 'all' ? 'on' : ''}">Overall</button>` +
+    CONFIG.levels.map((L, i) => `<button data-b="${i + 1}" class="${b === i + 1 ? 'on' : ''}" title="${esc(L.name)}">${i + 1}</button>`).join('');
+  for (const el of $('bdTabs').querySelectorAll('button')) el.onclick = () => { BD.board = el.dataset.b === 'all' ? 'all' : +el.dataset.b; renderBoard(); };
+  $('bdTabs').querySelector('.on')?.scrollIntoView?.({ block: 'nearest', inline: 'center' });
+  $('bdSub').textContent = b === 'all' ? `Overall · best run per stage, summed` : `Stage ${b} · ${CONFIG.levels[b - 1].name}`;
+  $('bdList').innerHTML = '<li class="empty">Loading…</li>';
+  const r = await lb.top(b); if (seq !== BD.seq) return;
+  $('bdNote').textContent = r.note || r.error || ''; $('bdNote').classList.toggle('hidden', !(r.note || r.error));
+  $('bdMe').innerHTML = r.me ? `You: <b>#${r.me.rank}</b>${r.players ? ` of ${r.players}` : ''} · ${formatEth(r.me.eth)} ETH · ${fmtT(r.me.time)} · ${r.me.stars}★`
+    : `You: <i>${b === 'all' ? 'clear a stage' : `clear stage ${b}`} to get ranked</i>`;
+  $('bdList').innerHTML = r.entries.length ? r.entries.map(e => `<li class="${e.me ? 'me' : ''}${e.rank <= 3 ? ' top' + e.rank : ''}"><span class="rk">${e.rank <= 3 ? ['🥇', '🥈', '🥉'][e.rank - 1] : e.rank}</span><span class="nm">${esc(e.name)}</span><span class="eth">${formatEth(e.eth)}</span><span class="tm">${fmtT(e.time)}</span><span class="sr">${e.stars}★</span></li>`).join('')
+    : `<li class="empty">${r.error ? 'Couldn’t load the board.' : 'No runs yet — be the first Santa here!'}</li>`;
+}
+
+// ---- wardrobe: slot tabs + item grid over a live close-up of the mascot (title scene, slow turntable)
+const WD = { slot: 'hat', preview: null, yaw: 0, spin: 0.55, drag: null };
+function updateWardDot() { const n = cosmetics.newCount(), d = $('wardNew'); if (!d) return; d.textContent = n; d.classList.toggle('hidden', !n); }
+function openWardrobe() {
+  $('title').classList.add('hidden'); $('wardrobe').classList.remove('hidden');
+  G.wardrobe = true; WD.yaw = player.heading + 0.5; WD.preview = null; WD.camInit = false; renderWardrobe();
+}
+function closeWardrobe() {
+  cosmetics.markSeen(WD.slot); G.wardrobe = false; WD.preview = null; applyLook(santa, cosmetics.look());
+  camera.clearViewOffset(); santa.root.rotation.y = player.heading; $('wardrobe').classList.add('hidden');
+ $('title').classList.remove('hidden'); updateWardDot();
+}
+function previewLook() { const L = cosmetics.look(); if (WD.preview) L[WD.preview.slot] = WD.preview; applyLook(santa, L); }
+function renderWardrobe() {
+  const [u, n] = cosmetics.counts();
+  $('wardCount').textContent = `${u} / ${n} unlocked`;
+  $('wardTabs').innerHTML = SLOTS.map(s => `<button class="wTab${s.id === WD.slot ? ' on' : ''}" data-s="${s.id}"><span class="ic">${s.icon}</span><span class="tl">${s.name}</span>${cosmetics.newCount(s.id) ? '<i class="dot"></i>' : ''}</button>`).join('');
+  const eq = cosmetics.equippedId(WD.slot);
+  $('wardGrid').innerHTML = ITEMS.filter(i => i.slot === WD.slot).map(it => {
+    const open = cosmetics.isUnlocked(it), [c, nd] = cosmetics.reqProgress(it), sel = WD.preview?.id === it.id;
+    const rq = open ? (it.id === eq ? '✓ Equipped' : cosmetics.isNew(it) ? 'NEW' : 'Tap to wear') : `🔒 ${cosmetics.reqText(it)}${nd > 1 ? ` · ${c}/${nd}` : ''}`;
+    return `<button class="wItem${open ? '' : ' locked'}${it.id === eq ? ' eq' : ''}${sel ? ' sel' : ''}${cosmetics.isNew(it) ? ' new' : ''}" data-id="${it.id}">
+      <span class="sw${it.sw === 'none' ? ' none' : ''}" style="background:${it.sw === 'none' ? 'transparent' : it.sw}"></span><span class="nm">${it.name}</span><span class="rq">${rq}</span></button>`;
+  }).join('');
+  const cur = WD.preview || BY_ID[eq];
+  $('wardInfo').innerHTML = WD.preview && !cosmetics.isUnlocked(WD.preview)
+    ? `Previewing <b>${cur.name}</b> · 🔒 ${cosmetics.reqText(cur)} (${cosmetics.reqProgress(cur).join('/')})`
+    : `Wearing <b>${cur.name}</b> ${SLOTS.find(s => s.id === WD.slot).name.toLowerCase()}`;
+  for (const b of $('wardTabs').children) b.onclick = () => { cosmetics.markSeen(WD.slot); WD.slot = b.dataset.s; WD.preview = null; previewLook(); sfx.hold?.(); renderWardrobe(); };
+  for (const b of $('wardGrid').children) b.onclick = () => {
+    const it = BY_ID[b.dataset.id];
+    if (cosmetics.isUnlocked(it)) { cosmetics.equip(it.id); WD.preview = null; sfx.equip?.(); }
+    else { WD.preview = WD.preview?.id === it.id ? null : it; sfx.locked?.(); }
+    previewLook(); renderWardrobe();
+  };
+}
+function bindWardrobeDrag() {
+  const el = $('wardrobe');
+  el.addEventListener('pointerdown', e => { if (e.target !== el) return; WD.drag = { x: e.clientX, yaw: WD.yaw }; el.setPointerCapture?.(e.pointerId); });
+  el.addEventListener('pointermove', e => { if (WD.drag) WD.yaw = WD.drag.yaw + (e.clientX - WD.drag.x) * 0.012; });
+  const up = () => { WD.drag = null; }; el.addEventListener('pointerup', up); el.addEventListener('pointercancel', up);
+}
+const _wFwd = new THREE.Vector3(), _wSide = new THREE.Vector3(), _wLook = new THREE.Vector3();
+const _wSz = new THREE.Vector2();
+function wardrobeCamera(dt) {
+  if (!WD.drag) WD.yaw += dt * WD.spin;
+  santa.root.rotation.y = WD.yaw;
+  const base = santa.root.position, asp = camera.aspect, portrait = asp < 1, fov = 34;
+  // camera faces the spawn street; the mascot sits in the free part of the screen (right in landscape, top in portrait)
+  _wFwd.set(Math.sin(player.heading), 0, Math.cos(player.heading));
+  _wSide.set(_wFwd.z, 0, -_wFwd.x);
+  const th = Math.tan(THREE.MathUtils.degToRad(fov / 2)), d = portrait ? 2.3 / (0.42 * th) / 2 : 2.95 / th / 2;
+  const cy = base.y + 0.9;
+  camera.position.set(base.x + _wFwd.x * d, cy + 0.35, base.z + _wFwd.z * d);
+  _wLook.set(base.x, cy, base.z);
+  camera.lookAt(_wLook); cam.pos.copy(camera.position); cam.look.copy(_wLook);
+  // shift the projection (not the aim) so the mascot sits in the free part of the screen
+  const sz = renderer.getSize(_wSz), fw = sz.x, fh = sz.y;
+  if (portrait) camera.setViewOffset(fw, fh, 0, fh * 0.22, fw, fh); else camera.setViewOffset(fw, fh, -fw * 0.19, 0, fw, fh);
+  if (camera.fov !== fov) { camera.fov = fov; camera.updateProjectionMatrix(); }
+}
+// unlock toasts (stacked above every screen, one bell per batch)
+function showUnlocks(items) {
+  sfx.unlock?.();
+  const box = $('unlockToasts');
+  items.slice(0, 4).forEach((it, i) => setTimeout(() => {
+    const el = document.createElement('div'); el.className = 'uToast';
+    el.innerHTML = `<span class="sw" style="background:${it.sw === 'none' ? '#223' : it.sw}"></span><span><small>Wardrobe unlock</small><b>${it.name}</b> ${SLOTS.find(s => s.id === it.slot).name.toLowerCase()}</span>`;
+    box.appendChild(el); requestAnimationFrame(() => el.classList.add('show'));
+    setTimeout(() => { el.classList.remove('show'); setTimeout(() => el.remove(), 400); }, 3600);
+  }, i * 450));
+  if (items.length > 4) setTimeout(() => hud.toast(`+${items.length - 4} more wardrobe unlocks`, 2), 2000);
+}
+
+// ---- stage select (unlocks + best stars from progress.js / localStorage)
+let pickedStage = null;
+function chosenStage() {
+  const n = CONFIG.levels.length, p = parseInt(params.get('level'));
+  let lv = pickedStage ?? (p ? p - 1 : progress.data.unlocked);
+  lv = clamp(lv | 0, 0, n - 1);
+  if (!progress.isUnlocked(lv) && !(params.get('qa') || DEBUG)) lv = progress.data.unlocked; // ?level= can't skip locked stages
+  return lv;
+}
+function updatePlayLabel() {
+  const lv = chosenStage(), fresh = lv === 0 && !progress.cleared(0);
+  $('playBtn').textContent = fresh ? 'Start delivering' : `▶ Stage ${lv + 1}: ${CONFIG.levels[lv].name}`;
+}
+function renderStages() {
+  const n = CONFIG.levels.length, cur = chosenStage(), stars = progress.totalStars();
+  $('stSub').innerHTML = `<b>${stars}</b> / ${n * 3} ★ · ${progress.clearedCount()} of ${n} stages cleared`;
+  $('stageGrid').innerHTML = CONFIG.levels.map((L, i) => {
+    const open = progress.isUnlocked(i), best = progress.best(i), st = best?.stars || 0;
+    const icons = stageIntros(i).map(k => CONFIG.intros[k][0]).slice(0, 3).join('');
+    return `<button class="stTile${open ? '' : ' locked'}${i === cur ? ' cur' : ''}${L.finale ? ' finale' : ''}" data-i="${i}" ${open ? '' : 'aria-disabled="true"'}>
+      <span class="n">STAGE ${i + 1}</span><span class="nm">${L.name}</span>
+      <span class="st">${open ? '★'.repeat(st) + `<i>${'★'.repeat(3 - st)}</i>` : `🔒 <span class="lg">Clear stage </span><span class="sh">after </span>${i}`}</span>${icons ? `<span class="ob" title="New this stage">${icons}</span>` : ''}</button>`;
+  }).join('');
+  for (const el of $('stageGrid').querySelectorAll('.stTile')) el.onclick = () => {
+    const i = +el.dataset.i;
+    if (!progress.isUnlocked(i)) { el.animate([{ transform: 'translateX(-4px)' }, { transform: 'translateX(4px)' }, { transform: 'none' }], { duration: 220 }); return; }
+    pickedStage = i; updatePlayLabel(); $('stages').classList.add('hidden'); $('playBtn').click();
+  };
 }
 
 function togglePause() {
   if (G.state === 'playing') { G.state = 'paused'; showOverlay('Paused', 'Take a breath — the slot is frozen.' + AUDIO_SLIDERS, null, 'Resume', () => { hideOverlay(); G.state = 'playing'; }, 'Quit to title', () => { hideOverlay(); toTitle(); }); }
   else if (G.state === 'paused') { hideOverlay(); G.state = 'playing'; }
 }
-function toTitle() { music.play('title'); clearLevel(); resetVillageLights(); G.state = 'title'; hud.show(false); $('touchUI').classList.add('hidden'); $('title').classList.remove('hidden'); }
+function toTitle() { pickedStage = null; updatePlayLabel(); music.play('title'); clearLevel(); resetVillageLights(); G.state = 'title'; hud.show(false); $('touchUI').classList.add('hidden'); $('title').classList.remove('hidden'); }
 
 function showOverlay(title, text, stats, btn, fn, btn2, fn2) {
   $('ovTitle').textContent = title; $('ovText').innerHTML = text;
@@ -277,6 +437,7 @@ function showOverlay(title, text, stats, btn, fn, btn2, fn2) {
   $('ovStats').classList.toggle('hidden', !stats);
   $('ovBtn').textContent = btn; $('ovBtn').onclick = fn;
   $('ovBtn2').classList.toggle('hidden', !btn2); if (btn2) { $('ovBtn2').textContent = btn2; $('ovBtn2').onclick = fn2; }
+  hideCardUI(); $('overlay').classList.remove('withCard');
   $('overlay').classList.remove('hidden');
   bindPauseSliders();
 }
@@ -327,10 +488,13 @@ function bindScreenUI() {
 function hideOverlay() { $('overlay').classList.add('hidden'); }
 
 // ------------------------------------------------------------ level setup
+function spawnPoint() { // on the main street (road 0) at spawnRadius
+  const road = world.roads[0];
+  return road.pts.find(q => Math.hypot(q.x, q.z) >= CONFIG.world.spawnRadius) || road.pts[road.pts.length - 1];
+}
 function resetPlayer() {
   // spawn on the main street (road 0), looking back up the cobbles toward the big tree in the square
-  const road = world.roads[0];
-  const p = road.pts.find(q => Math.hypot(q.x, q.z) >= CONFIG.world.spawnRadius) || road.pts[road.pts.length - 1];
+  const p = spawnPoint();
   player.pos.set(p.x, 0, p.z);
   player.vel.set(0, 0, 0);
   player.heading = Math.atan2(-p.tx, -p.tz);
@@ -341,15 +505,15 @@ function resetPlayer() {
 // per-level markers/rings/labels own their geometry + material: free them on level change (leak audit);
 // module-shared materials stay alive (they are reused by the next level).
 function disposeLevelObj(o) {
-  const keep = new Set([beamMat, beaconMat, beaconMatSlow, world?.M?.ice, _proxyMat]);
+  const keep = new Set([beamMat, beaconMat, beaconMatSlow, beaconMatChimney, world?.M?.ice, _proxyMat]);
   o.traverse(m => { if (m.geometry && !m.geometry.userData?.shared) m.geometry.dispose(); for (const x of [].concat(m.material || [])) if (!keep.has(x)) x.dispose(); });
 }
 const _camW = new THREE.Vector3(), _camL = new THREE.Vector3(), _ORIGIN = new THREE.Vector3(); // per-frame scratch (no GC churn)
 function clearLevel() {
   for (const o of G.levelObjects) { o.parent?.remove(o); disposeLevelObj(o); }
   G.levelObjects = []; G.targets = []; G.powerups = []; G.ice = []; fxs.sparkles?.setIce([]); fxs.feet?.reset();
-  flights?.clear();
-  G.mumpLeft = 0; G.gossipBusy = false;
+  flights?.clear(); obstacles?.clear();
+  G.mumpLeft = 0; G.gossipBusy = false; G.stun = 0; G.invuln = 0; G.plan = null;
 }
 
 function setBuildingBlue(b, on, strong = 1) {
@@ -370,48 +534,29 @@ function startLevel(idx) {
   G.level = idx; G.levelTime = 0; G.levelStartScore = G.score;
   G.timer = L.timer * D.timerMult; G.delivered = 0; G.storm = 0; G.stormLin = 0; G.endingT = 0;
   G.combo = 0; G.bestCombo = 0; G.lastDeliverT = -1e9; G.boosted = 0; boostTrail?.reset();
-  const R = rng(CONFIG.world.seed * 7 + idx * 131);
-  // --- choose validator houses inside the level area, spread out
-  const cands = world.buildings.filter(b => {
-    const d = Math.hypot(b.x, b.z);
-    return d < L.areaRadius && d > 20 && !world.inLake(b.trigger.x, b.trigger.z, 1) && !world.buildingAt(b.trigger.x, b.trigger.z, 0.3);
-  });
-  // shuffle (validator-house type preferred first)
-  for (let i = cands.length - 1; i > 0; i--) { const j = Math.floor(R() * (i + 1)); [cands[i], cands[j]] = [cands[j], cands[i]]; }
-  cands.sort((a, b) => (b.type === 'validatorHouse') - (a.type === 'validatorHouse'));
-  const picked = [];
-  for (let minD = 26; picked.length < L.validators && minD >= 0; minD -= 6) {
-    for (const b of cands) {
-      if (picked.length >= L.validators) break;
-      if (picked.includes(b)) continue;
-      if (picked.every(p => Math.hypot(p.x - b.x, p.z - b.z) >= minD)) picked.push(b);
-    }
-  }
-  const nSlow = Math.round(L.slowNodes * D.slowNodeMult);
-  const slowSet = new Set(picked.filter(b => b.type !== 'validatorHouse').slice(0, nSlow));
-  while (slowSet.size < Math.min(nSlow, picked.length)) slowSet.add(picked[slowSet.size]);
-  G.targets = picked.map(b => makeTarget(b, slowSet.has(b)));
+  G.baseTimer = G.timer; G.runJumps = 0; G.runPowerups = 0; G.runHits = 0; G.runChimneys = 0; G.lastRun = null; G.lbPending = null;
+  lb.startRun(idx); // server-signed run token for this attempt (no-op in local mode)
+  // --- deterministic stage layout: houses + obstacles (planStage keeps every house reachable; see routeCheck)
+  const plan = planStage(world, graph, idx, spawnPoint()), R = plan.R; G.plan = plan;
+  G.targets = plan.targets.map(t => makeTarget(t.b, t.slow, t.chimney));
   G.total = G.targets.length;
   // --- power-ups on roads
   const nP = Math.max(1, L.powerups + D.powerupCountAdd);
   for (let i = 0; i < nP; i++) spawnPowerup(R, L);
   // --- ice patches on roads
-  if (L.ice) {
-    const n = Math.round(L.iceCount * (0.6 + 0.4 * D.iceSlipMult));
-    for (let i = 0; i < n; i++) {
-      const p = world.randomRoadPoint(R, 28, L.areaRadius + 10);
-      const r = lerp(CONFIG.obstacles.ice.minRadius, CONFIG.obstacles.ice.maxRadius, R());
-      const geo = new THREE.CircleGeometry(r, 28); geo.rotateX(-Math.PI / 2); worldUV(geo, 0.2);
-      const m = new THREE.Mesh(geo, world.M.ice); m.position.set(p.x, 0.07 + i * 0.001, p.z); m.receiveShadow = true;
-      scene.add(m); G.levelObjects.push(m); G.ice.push({ x: p.x, z: p.z, r });
-    }
-    fxs.sparkles?.setIce(G.ice);
-  }
+  plan.ice.forEach((p, i) => {
+    const geo = new THREE.CircleGeometry(p.r, 28); geo.rotateX(-Math.PI / 2); worldUV(geo, 0.2);
+    const m = new THREE.Mesh(geo, world.M.ice); m.position.set(p.x, 0.07 + i * 0.001, p.z); m.receiveShadow = true;
+    scene.add(m); G.levelObjects.push(m); G.ice.push({ x: p.x, z: p.z, r: p.r });
+  });
+  if (G.ice.length) fxs.sparkles?.setIce(G.ice);
+  obstacles.low = lowApplied; obstacles.build(plan);
   resetPlayer();
   hideOverlay(); $('title').classList.add('hidden');
   hud.show(true); $('touchUI').classList.toggle('hidden', !isTouch);
   G.state = 'playing';
-  hud.toast(`Level ${idx + 1}: ${L.name}`, 2.4);
+  hud.toast(`Stage ${idx + 1}/${CONFIG.levels.length}: ${L.name}`, 2.4);
+  showIntro(idx);
 }
 
 const beamMat = new THREE.ShaderMaterial({
@@ -433,13 +578,13 @@ const beaconShader = (hex) => new THREE.ShaderMaterial({
   vertexShader: 'varying vec2 vUv; varying float vD; void main(){ vUv = uv; vec4 mv = modelViewMatrix*vec4(position,1.0); vD = -mv.z; gl_Position = projectionMatrix*mv; }',
   fragmentShader: 'varying vec2 vUv; varying float vD; uniform vec3 uC; uniform float uT; void main(){ float a = pow(clamp(1.0-vUv.y, 0.0, 1.0), 1.4)*smoothstep(0.0, 0.06, vUv.y)*(0.85+0.15*sin(uT*2.0-vUv.y*30.0)) * mix(0.14, 0.6, smoothstep(12.0, 80.0, vD)); gl_FragColor = vec4(uC*1.4, a); }',
 });
-const beaconMat = beaconShader(0x3fb6ff), beaconMatSlow = beaconShader(0xffa63a);
-let slowTex = null;
+const beaconMat = beaconShader(0x3fb6ff), beaconMatSlow = beaconShader(0xffa63a), beaconMatChimney = beaconShader(0xffd25a);
+let slowTex = null, chimneyTex = null;
 
-function makeTarget(b, slow) {
+function makeTarget(b, slow, chimney = false) {
   const g = new THREE.Group();
-  // floating gem above the roof
-  const gem = new THREE.Mesh(new THREE.OctahedronGeometry(0.85), new THREE.MeshBasicMaterial({ color: new THREE.Color(0x3fb6ff).multiplyScalar(2.2) }));
+  // floating gem above the roof (gold = chimney drop: jump at the door)
+  const gem = new THREE.Mesh(new THREE.OctahedronGeometry(0.85), new THREE.MeshBasicMaterial({ color: new THREE.Color(chimney ? 0xffc83a : 0x3fb6ff).multiplyScalar(2.2) }));
   gem.position.set(b.x, b.height + 3.2, b.z); gem.scale.y = 1.5;
   const halo = new THREE.Sprite(new THREE.SpriteMaterial({ map: glowTexture(), color: 0x3fb6ff, transparent: true, depthWrite: false, blending: THREE.AdditiveBlending, opacity: 0.9 }));
   halo.scale.setScalar(7); gem.add(halo);
@@ -459,7 +604,7 @@ function makeTarget(b, slow) {
   let beacon = null;
   if (CONFIG.nav?.beacons !== false) {
     const H = CONFIG.nav?.beaconHeight ?? 70;
-    beacon = new THREE.Mesh(new THREE.CylinderGeometry(0.45, 0.7, H, 12, 1, true), slow ? beaconMatSlow : beaconMat);
+    beacon = new THREE.Mesh(new THREE.CylinderGeometry(0.45, 0.7, H, 12, 1, true), slow ? beaconMatSlow : chimney ? beaconMatChimney : beaconMat);
     beacon.position.set(b.x, b.height + 2 + H / 2, b.z); beacon.renderOrder = 2; g.add(beacon);
   }
   if (slow) {
@@ -467,12 +612,20 @@ function makeTarget(b, slow) {
     const label = new THREE.Sprite(new THREE.SpriteMaterial({ map: slowTex, transparent: true, depthWrite: false }));
     label.scale.set(5, 1.25, 1); label.position.set(b.x, b.height + 6.2, b.z); g.add(label);
   }
+  if (chimney) {
+    chimneyTex ??= textTexture('CHIMNEY · JUMP', { w: 512, h: 128, bg: 'rgba(40,26,0,0.78)', fg: '#ffe08a', border: '#ffc83a', glow: '#ffb21a', font: 'bold 62px system-ui, sans-serif' });
+    const label = new THREE.Sprite(new THREE.SpriteMaterial({ map: chimneyTex, transparent: true, depthWrite: false }));
+    label.scale.set(5, 1.25, 1); label.position.set(b.x, b.height + 6.2, b.z); g.add(label);
+  }
   scene.add(g); G.levelObjects.push(g);
-  return { b, slow, delivered: false, sending: false, progress: 0, group: g, gem, halo, prog, ring, glow, beam, beacon, fadeT: -1 };
+  return { b, slow, chimney, delivered: false, sending: false, progress: 0, group: g, gem, halo, prog, ring, glow, beam, beacon, fadeT: -1 };
 }
 
 function spawnPowerup(R, L) {
-  const p = world.randomRoadPoint(R, 26, Math.min(CONFIG.world.radius - 10, L.areaRadius + 15));
+  // never right at the spawn (a free mump2p in the first second would auto-deliver half the stage)
+  const sp = spawnPoint(); let p, k = 0;
+  do p = world.randomRoadPoint(R, 26, Math.min(CONFIG.world.radius - 10, L.areaRadius + 15));
+  while (++k < 16 && Math.hypot(p.x - sp.x, p.z - sp.z) < 35);
   const g = new THREE.Group(); g.position.set(p.x, 0, p.z);
   const logo = makeLogoMesh(1.25, 0.032, 0x51b1fe, 1.45); logo.position.y = 1.8; g.add(logo); // thin neon-blue ring, billboarded in updateTargets
   const halo = new THREE.Sprite(new THREE.SpriteMaterial({ map: glowTexture(), color: 0x2f9bff, transparent: true, depthWrite: false, blending: THREE.AdditiveBlending, opacity: 0.32 }));
@@ -529,25 +682,28 @@ function updatePlayer(dt) {
   const fx = Math.sin(cam.yaw), fz = Math.cos(cam.yaw); // camera forward
   const rx = -fz, rz = fx; // camera right
   const sk = player.sprintK * player.sprintK * (3 - 2 * player.sprintK);
-  const speedMax = lerp(P.walkSpeed, P.sprintSpeed, sk) * D.speedMult;
-  const wantX = (fx * ax.y + rx * ax.x) * speedMax, wantZ = (fz * ax.y + rz * ax.x) * speedMax;
+  const stunned = G.stun > 0; // knocked back by an obstacle: no control for a moment
+  G.inLag = obstacles.inLag(player.pos.x, player.pos.z);
+  const speedMax = lerp(P.walkSpeed, P.sprintSpeed, sk) * D.speedMult * obstacles.speedMult(player.pos.x, player.pos.z, G.mumpLeft > 0);
+  const wantX = stunned ? 0 : (fx * ax.y + rx * ax.x) * speedMax, wantZ = stunned ? 0 : (fz * ax.y + rz * ax.x) * speedMax;
   const ice = onIce(player.pos.x, player.pos.z);
-  const hasInput = Math.hypot(ax.x, ax.y) > 0.05;
+  const hasInput = !stunned && Math.hypot(ax.x, ax.y) > 0.05;
   let accel = ice ? P.iceAccel / D.iceSlipMult : P.accel;
   if (ice && !hasInput) accel = P.iceFriction / D.iceSlipMult;
   const k = 1 - Math.exp(-accel * dt / Math.max(1, speedMax) * (ice ? 1 : 2.2));
   player.vel.x += (wantX - player.vel.x) * k; player.vel.z += (wantZ - player.vel.z) * k;
-  if (!ice && !hasInput) { player.vel.multiplyScalar(Math.exp(-14 * dt)); }
+  if (!ice && !hasInput) { player.vel.multiplyScalar(Math.exp((stunned ? -3 : -14) * dt)); }
   const before = player.pos.clone();
   player.pos.x += player.vel.x * dt; player.pos.z += player.vel.z * dt;
+  const gust = obstacles.gust; if (gust.push) { player.pos.x += gust.x * gust.push * dt; player.pos.z += gust.z * gust.push * dt; } // wind shove
   // vertical: real jump arc with gravity, coyote time and input buffering
   const jumpKey = input.keys.has('Space') || input.jumpBtn;
   if (jumpKey && !G.jumpHeld) player.jumpBuf = J.bufferTime; G.jumpHeld = jumpKey;
   player.jumpBuf = Math.max(0, player.jumpBuf - dt);
   player.coyote = player.air ? Math.max(0, player.coyote - dt) : J.coyoteTime;
-  if (player.jumpBuf > 0 && player.coyote > 0 && !G.slowHold) {
+  if (player.jumpBuf > 0 && player.coyote > 0 && !G.slowHold && !stunned) {
     player.vy = J.velocity; player.air = true; player.coyote = 0; player.jumpBuf = 0;
-    santa.jumpStart?.(); sfx.jump?.();
+    santa.jumpStart?.(); sfx.jump?.(); G.runJumps = (G.runJumps || 0) + 1;
   }
   if (player.air) {
     player.vy -= J.gravity * dt; player.jy += player.vy * dt;
@@ -588,6 +744,7 @@ function updateCamera(dt, t) {
     return;
   }
   let fov = C.fov;
+  if (G.state === 'title' && G.wardrobe) { wardrobeCamera(dt); return; }
   if (G.state === 'title') {
     // slow crane: orbit + breathing radius/height, the look target drifts between tree and rooftops
     const a = t * 0.05; const r = 24 + Math.sin(t * 0.09) * 5;
@@ -768,9 +925,18 @@ function updateDelivery(dt) {
   }
   G.hint = ''; G.slowHold = !!near?.slow;
   for (const t of G.targets) if (t !== near && !t.sending && !t.delivered) t.progress = Math.max(0, t.progress - dt * 1.5);
-  if (near && !(G.gossipBusy && !mump)) {
+  if (near?.chimney) { // chimney drop: no holding, the gift goes down the chimney when Santa jumps at the door
+    G.hint = 'Chimney house: jump to drop it in!';
+    if (player.air && player.jy >= CONFIG.obstacles.chimney.minJump) {
+      near.progress = 1; near.sending = true; G.runChimneys = (G.runChimneys || 0) + 1;
+      const ch = near.b.chimney, to = ch ? ch.clone().setY(ch.y + 0.4) : new THREE.Vector3(near.b.x, near.b.height + 1, near.b.z);
+      flights.gossip(santa.giftWorldPos(), to, 0.7, () => { particles.burst(to, new THREE.Color(2.2, 1.5, 0.4), 50, 5, 0.9); deliver(near); });
+      sfx.whoosh(0.5, 0.18);
+    }
+  } else if (near && !(G.gossipBusy && !mump)) {
     let hold = C.holdTime * D.holdMult / (mump ? CONFIG.powerup.speedFactor : 1);
     if (near.slow) hold *= C.slowNodeHoldMult * D.slowNodeMult;
+    hold *= obstacles.holdMult(near.b.trigger.x, near.b.trigger.z, mump);
     near.progress += dt / hold;
     G.hint = near.slow ? 'Slow node… hold position' : (mump ? 'mump2p delivering…' : 'Gossiping block…');
     if (near.progress >= 1) {
@@ -794,7 +960,7 @@ function updateDelivery(dt) {
         const sd = (t.b.id * 0.618) % 1;
         flights.shard(from, doorTarget(t), dur, () => deliver(t), sd);
         // extra cosmetic streams braid alongside the main one (multi-path mump2p broadcast)
-        for (const k of [-1, 1]) flights.shard(from, doorTarget(t), dur * (1 + 0.08 * k), null, (sd + 0.22 * k + 1) % 1, 0.55);
+        if (!lowApplied) for (const k of [-1, 1]) flights.shard(from, doorTarget(t), dur * (1 + 0.08 * k), null, (sd + 0.22 * k + 1) % 1, 0.55);
         i++;
       }
       if (i) { sfx.shard(); santa.giftScale = 0.55; particles.burst(from, new THREE.Color(0.4, 0.8, 2), 60, 6, 0.7); fxs.waves.spawn(player.pos.clone(), CONFIG.powerup.shardRadius * 0.6, 0.8, 0x49c2ff); G.flash = Math.max(G.flash || 0, 0.45); }
@@ -814,6 +980,13 @@ function updateTargets(dt, t) {
       tg.group.children.forEach(c => { if (c.isSprite) c.visible = false; });
       if (tg.fadeT < 0) { tg.gem.visible = false; tg.glow.material.opacity = 0.75; }
       continue;
+    }
+    // LOW draw-call budget: door-level parts (ring, progress arc, beam, house glow) only near the player;
+    // the gem + sky beacon still mark every house at range
+    if (lowApplied) {
+      const near = (player.pos.x - tg.b.x) ** 2 + (player.pos.z - tg.b.z) ** 2 < 42 * 42;
+      tg.glow.visible = near;
+      if (!tg.delivered) tg.ring.visible = tg.prog.visible = tg.beam.visible = near;
     }
     if (tg.delivered) continue;
     tg.gem.rotation.y = t * 1.6 + tg.b.id;
@@ -847,7 +1020,7 @@ function pickPowerup(p) {
   const D = difficulty(), L = CONFIG.levels[G.level];
   p.active = false; p.group.visible = false; p.respawnT = CONFIG.powerup.respawnDelay;
   G.mumpDur = L.powerupDuration * D.powerupDurationMult;
-  G.mumpLeft = G.mumpDur; G.pulseT = 0;
+  G.mumpLeft = G.mumpDur; G.pulseT = 0; G.runPowerups = (G.runPowerups || 0) + 1;
   particles.burst(new THREE.Vector3(p.x, 1.8, p.z), new THREE.Color(0.3, 1.1, 2.4), 90, 9, 1.0);
   particles.burst(new THREE.Vector3(p.x, 1.4, p.z), new THREE.Color(0.35, 0.85, 2.4), 140, 14, 1.2);
   fxs.waves.spawn(player.pos.clone(), CONFIG.powerup.shardRadius * 0.9, 1.1, 0x49c2ff, true);
@@ -885,7 +1058,11 @@ function updateStorm(dt) {
   scene.fog.density = Math.max(G.weather.fog, lowApplied ? (CONFIG.qualityPresets.low.fogMin ?? 0) : 0);
   scene.fog.color.copy(FOG_COLOR).lerp(STORM_FOG, st); scene.background.copy(scene.fog.color);
   world.sky.material.uniforms.uStorm && (world.sky.material.uniforms.uStorm.value = st);
-  hemi.intensity = 0.66 - st * 0.12;
+  G.wxDark = damp(G.wxDark ?? 0, P.dark || 0, 1.5, dt); // night / blizzard stages: dimmer ambient + darker fog
+  hemi.intensity = (0.66 - st * 0.12) * (1 - G.wxDark);
+  if (G.wardrobe) hemi.intensity = Math.max(hemi.intensity, 1.2); // wardrobe preview fill (no extra light = no recompile)
+  moon.intensity = 0.9 * (1 - G.wxDark * 0.6);
+  if (G.wxDark > 0.001) { scene.fog.color.multiplyScalar(1 - G.wxDark * 0.7); scene.background.copy(scene.fog.color); }
   post.setWeather?.(st);
 }
 
@@ -942,22 +1119,145 @@ function fadeLightPool(dt) { // every frame: ease intensities (1 - exp(-k dt), f
   }
 }
 
+// ---- obstacles: hits, events, intro cards
+function hitPlayer(kind, h) {
+  if (G.state !== 'playing' || G.invuln > 0) return;
+  const O = CONFIG.obstacles, D = difficulty();
+  G.invuln = O.hitInvuln; G.stun = O.stun; G.runHits = (G.runHits || 0) + 1;
+  const n = Math.hypot(h.nx, h.nz) || 1;
+  player.vel.set(h.nx / n * O.knockback, 0, h.nz / n * O.knockback);
+  if (!player.air) { player.vy = 4.2; player.air = true; player.coyote = 0; }
+  const steal = (h.steal || 0) * (D.timerMult > 1.2 ? 0.6 : 1);
+  if (steal) { G.timer = Math.max(0.5, G.timer - steal); hud.toast(`${h.msg} ${steal.toFixed(0)}s!`, 1.6); G.stealFlash = 1.2; sfx.steal?.(); }
+  else hud.toast(h.msg, 1.1);
+  sfx.hit?.(); cam.kick = 0.5; santa.react?.('hit');
+  particles.burst(new THREE.Vector3(player.pos.x, 1.0, player.pos.z), new THREE.Color(1.6, 1.8, 2.2), 40, 5, 0.6);
+}
+function obstacleEvent(e, o) {
+  if (G.state !== 'playing') return;
+  const near = (x, z, r) => Math.hypot(player.pos.x - x, player.pos.z - z) < r;
+  if (e === 'honk') sfx.honk?.();
+  else if (e === 'gustWarn') { sfx.gust?.(0.5); }
+  else if (e === 'gust') { sfx.gust?.(1); }
+  else if (e === 'bossWake') { hud.toast('👹 The Reorg Grinch woke up!', 2.4); sfx.roar?.(); }
+  else if (e === 'bossTele') { if (near(o.x, o.z, 40)) sfx.roar?.(0.5); }
+  else if (e === 'slam') { if (near(o.x, o.z, 45)) { sfx.slam?.(); cam.kick = Math.max(cam.kick || 0, 0.6); } }
+  else if (e === 'ballPop') { if (near(o.road.pts[0].x, o.road.pts[0].z, 30)) particles.burst(new THREE.Vector3(o.road.pts[0].x, 0.8, o.road.pts[0].z), new THREE.Color(1.8, 1.9, 2.1), 30, 4, 0.7); }
+}
+/** obstacle / weather keys a stage uses (for the first-time intro cards) */
+function stageKeys(L) {
+  const k = new Set();
+  if (L.iceCount > 0) k.add('ice'); if (L.slowNodes > 0) k.add('slow');
+  if (L.weather === 'storms' || L.weather === 'blizzard') k.add('storms');
+  if (L.weather === 'night') k.add('night'); if (L.weather === 'blizzard') k.add('blizzard');
+  for (const [key, n] of Object.entries(L.obs || {})) if (n) k.add(key);
+  return k;
+}
+function stageIntros(idx) {
+  const seen = new Set(); CONFIG.levels.slice(0, idx).forEach(L => stageKeys(L).forEach(k => seen.add(k)));
+  return [...stageKeys(CONFIG.levels[idx])].filter(k => !seen.has(k) && CONFIG.intros[k]);
+}
+let introQ = [], introT = 0;
+function showIntro(idx) { introQ = stageIntros(idx).map(k => CONFIG.intros[k]); introT = 0.9; $('intro').classList.add('hidden'); }
+function updateIntro(dt) {
+  if (introT <= 0 && !introQ.length) return;
+  introT -= dt;
+  if (introT > 0) return;
+  const el = $('intro');
+  if (!introQ.length) { el.classList.add('hidden'); return; }
+  const [icon, title, text] = introQ.shift();
+  el.innerHTML = `<div class="ic">${icon}</div><div><b>New: ${title}</b><span>${text}</span></div>`;
+  el.classList.remove('hidden'); el.style.animation = 'none'; void el.offsetWidth; el.style.animation = '';
+  introT = 4.2; sfx.chime?.();
+}
+
 function levelComplete() {
   if (G.state !== 'playing') return;
   G.state = 'levelComplete'; music.stop(); sfx.jingle();
   const last = G.level >= CONFIG.levels.length - 1;
-  if (last) { startEnding(); return; }
+  const run = recordRun(true);
+  const portrait = capturePortrait();
+  if (last) { startEnding(); makeCard('final', run, portrait); return; }
   const timeLeft = Math.max(0, G.timer);
-  showOverlay(`Level ${G.level + 1} complete!`, `Every validator in <b>${CONFIG.levels[G.level].name}</b> got the block.`,
+  const st = '★'.repeat(run.stars) + '☆'.repeat(3 - run.stars);
+  showOverlay(`Stage ${G.level + 1} complete! ${st}`, `Every validator in <b>${CONFIG.levels[G.level].name}</b> got the block.${run.newBest && run.prevBest ? ' <b class="blue">New best!</b>' : ''}`,
     [['Staked ETH', formatEth(G.score)], [X.resultsLabel, `${G.boosted}/${G.total}`], ['Time left', `${timeLeft.toFixed(1)}s`], [X.bestComboLabel, G.bestCombo > 1 ? `x${G.bestCombo}` : '—']],
-    `Next: ${CONFIG.levels[G.level + 1].name}`, () => startLevel(G.level + 1));
+    `Next: ${CONFIG.levels[G.level + 1].name}`, () => startLevel(G.level + 1), 'Title', () => { hideOverlay(); G.score = 0; hud.displayScore = 0; toTitle(); });
+  makeCard('clear', run, portrait);
 }
 
 function gameOver() {
   G.state = 'gameOver'; music.stop(); sfx.fail();
+  const run = recordRun(false);
+  const portrait = capturePortrait();
   showOverlay('Slot missed!', `The block didn't reach every validator in time.<br>${G.total - G.delivered} validator${G.total - G.delivered === 1 ? '' : 's'} still waiting.`,
-    [['Staked ETH', formatEth(G.score)], [X.resultsLabel, `${G.boosted}/${G.total}`], ['Level', `${G.level + 1}`]],
-    'Retry level', () => { G.score = G.levelStartScore; hud.displayScore = G.score; startLevel(G.level); }, 'Title', () => { hideOverlay(); G.score = 0; hud.displayScore = 0; toTitle(); });
+    [['Staked ETH', formatEth(G.score)], [X.resultsLabel, `${G.boosted}/${G.total}`], ['Stage', `${G.level + 1}`]],
+    'Retry stage', () => { G.score = G.levelStartScore; hud.displayScore = G.score; startLevel(G.level); }, 'Title', () => { hideOverlay(); G.score = 0; hud.displayScore = 0; toTitle(); });
+  makeCard('over', run, portrait);
+}
+
+// ---- run record + share card
+function recordRun(cleared) {
+  const L = CONFIG.levels[G.level], time = G.levelTime;
+  const stars = cleared ? starsFor(L, G.timer, G.baseTimer || L.timer) : 0;
+  const r = { stage: G.level, cleared, stars, time, eth: G.score - G.levelStartScore, totalEth: G.score, delivered: G.delivered, total: G.total, hits: G.runHits || 0,
+    combo: G.bestCombo || 0, jumps: G.runJumps || 0, powerups: G.runPowerups || 0, chimneys: G.runChimneys || 0, speedrun: cleared && G.timer >= (G.baseTimer || L.timer) * 0.5, difficulty: CONFIG.difficulty };
+  Object.assign(r, progress.recordRun(G.level, r, CONFIG.levels.length));
+  G.lastRun = r; for (const h of runHooks) h(r);
+  return r;
+}
+const runHooks = []; // after every recorded run: cosmetic unlocks, leaderboard submit
+const lb = createLeaderboard(CONFIG.leaderboard, progress, CONFIG.levels);
+const cardHooks = { cosmetics: () => cosmetics.names(), rank: async (run) => { // global rank line on the score card (waits <= 2.5 s for the submit)
+  if (!run.cleared || !G.lbPending || !lb.online) return '';
+  const res = await Promise.race([G.lbPending, new Promise(r => setTimeout(r, 2500))]);
+  return res?.rank ? `Global #${res.rank} of ${res.players} on stage ${run.stage + 1}` : '';
+} };
+runHooks.push((r) => {
+  if (!r.cleared) return;
+  G.lbPending = lb.submit(r).then(res => {
+    G.lbLast = res;
+    if (lb.online && res?.rank && res.improved) hud.toast(`🏆 Global #${res.rank} on stage ${r.stage + 1}`, 2.2);
+    if (lb.online && res?.error && res.error !== 'offline') console.warn('leaderboard:', res.error);
+    return res;
+  });
+});
+runHooks.push(() => { const fresh = cosmetics.check(); if (fresh.length) showUnlocks(fresh); updateWardDot(); });
+// mascot portrait: a short-lens camera in front of Santa, rendered once and copied out in the same task
+function capturePortrait() {
+  try {
+    const el = renderer.domElement, W0 = el.width, H0 = el.height;
+    const p0 = camera.position.clone(), q0 = camera.quaternion.clone(), f0 = camera.fov;
+    const r = santa.root; r.updateMatrixWorld();
+    const fwd = r.getWorldDirection(new THREE.Vector3()); fwd.y = 0; if (fwd.lengthSq() < 1e-6) fwd.set(0, 0, 1); fwd.normalize();
+    const side = _v1.set(fwd.z, 0, -fwd.x), base = r.position;
+    camera.position.copy(base).addScaledVector(fwd, 3.3).addScaledVector(side, 2.3); camera.position.y = base.y + 1.6;
+    const A = 470 / 571, fr = Math.min(1, (W0 / H0) / A); // portrait screens: widen the lens so the cropped window still spans 30 deg
+    camera.fov = THREE.MathUtils.radToDeg(2 * Math.atan(Math.tan(THREE.MathUtils.degToRad(15)) / fr)); camera.updateProjectionMatrix(); camera.lookAt(base.x, base.y + 0.95, base.z); camera.updateMatrixWorld();
+    const hv = giftHalo.visible, h0 = hemi.intensity; giftHalo.visible = false; hemi.intensity = Math.max(h0, 1.25); // portrait fill (no extra light = no shader recompile)
+    post.update(t, { focus: camera.position.distanceTo(base), boost: 0, flash: 0, storm: G.storm });
+    culler?.update(1, camera); post.render();
+    const ch = Math.round(H0 * fr), cw = Math.min(W0, Math.round(ch * A)), s = Math.min(1, 640 / ch);
+    const c = document.createElement('canvas'); c.width = Math.round(cw * s); c.height = Math.round(ch * s);
+    c.getContext('2d').drawImage(el, (W0 - cw) / 2, (H0 - ch) / 2, cw, ch, 0, 0, c.width, c.height);
+    giftHalo.visible = hv; hemi.intensity = h0; camera.position.copy(p0); camera.quaternion.copy(q0); camera.fov = f0; camera.updateProjectionMatrix();
+    return c;
+  } catch (e) { console.warn('portrait capture failed', e); return null; }
+}
+async function makeCard(result, run, portrait) {
+  const L = CONFIG.levels[run.stage];
+  const info = { result, stageNo: run.stage + 1, stageCount: CONFIG.levels.length, stageName: L.name, eth: run.totalEth, stageEth: run.eth, time: run.time,
+    delivered: run.delivered, total: run.total, stars: run.stars, combo: run.combo, title: titleFor(progress.totalStars()), rank: (await cardHooks.rank(run)) || `${progress.totalStars()}★ collected · ${CONFIG.difficulty} mode`,
+    cosmetics: cardHooks.cosmetics(), portrait, date: new Date().toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' }), url: B.shareUrl };
+  try {
+    const cv = await drawScoreCard(info); G.lastCard = cv; G.lastCardInfo = info;
+    if (result === 'final') {
+      const btn = $('endCardBtn'); btn.classList.remove('hidden');
+      btn.onclick = () => { showOverlay('Your score card', 'Share the run that brought Christmas to every validator.', null, 'Close', hideOverlay); showCardUI(cv, info, m => hud.toast(m, 1.8)); };
+      return;
+    }
+    if (G.state === result.replace('clear', 'levelComplete').replace('over', 'gameOver')) showCardUI(cv, info, m => hud.toast(m, 1.8));
+  } catch (e) { console.warn('score card failed', e); }
 }
 
 function startEnding() {
@@ -1071,6 +1371,7 @@ function frame(dt) {
   const playing = G.state === 'playing';
   if (playing) {
     G.levelTime += dt; G.timer -= dt; G.bonusFlash -= dt;
+    G.stun = Math.max(0, (G.stun || 0) - dt); G.invuln = Math.max(0, (G.invuln || 0) - dt); G.stealFlash = Math.max(0, (G.stealFlash || 0) - dt);
     updatePlayer(dt);
     updateDelivery(dt);
     if (G.timer < 10 && Math.floor(G.timer) !== G.lastTick) { G.lastTick = Math.floor(G.timer); if (G.timer > 0) sfx.tick(); }
@@ -1078,7 +1379,10 @@ function frame(dt) {
   } else if (G.state !== 'paused') { santa.update(dt, 0, false); }
   if (G.state !== 'paused') {
     updateTargets(dt, t);
+    obstacles.update(dt, { player, t, levelTime: G.levelTime, playing });
+    updateIntro(dt);
     updateStorm(dt);
+    if (obstacles.gust.k > 0 && G.weather) G.weather.wind = Math.min(1.4, G.weather.wind + obstacles.gust.k * 0.9);
     world.update(dt, t);
     interiors?.update(t);
     if (world.bulbMat) { const u = world.bulbMat.uniforms; u.uTime.value = t; u.uFog.value = scene.fog?.density ?? 0;
@@ -1111,7 +1415,10 @@ function frame(dt) {
     hud.update(dt, S);
     const left = X.comboWindow - (G.levelTime - G.lastDeliverT);
     hud.combo(left > 0 && G.state === 'playing' ? G.combo : 0, comboMult(G.combo), Math.max(0, left / X.comboWindow));
-    hud.drawMinimap({ player: player.pos, heading: player.heading, camYaw: cam.yaw, targets: G.targets, powerups: G.powerups, ice: G.ice, areaRadius: CONFIG.levels[G.level].areaRadius, mump: G.mumpLeft > 0 });
+    const Lv = CONFIG.levels[G.level];
+    hud.drawMinimap({ player: player.pos, heading: player.heading, camYaw: cam.yaw, targets: G.targets, powerups: G.powerups, ice: G.ice, areaRadius: Lv.areaRadius, areaMin: Lv.areaMin, marks: obstacles.marks(), mump: G.mumpLeft > 0 });
+    hud.gust(obstacles.gust, cam.yaw, G.state === 'playing');
+    hud.status({ lag: G.inLag && G.mumpLeft <= 0, steal: G.stealFlash > 0 });
   }
   nav?.update(dt, t, { player: { x: player.pos.x, y: player.surfY || 0, z: player.pos.z }, targets: G.targets, camera, playing: G.state === 'playing' });
   // --- FX layer
@@ -1121,6 +1428,7 @@ function frame(dt) {
   fxs.feet?.update(t, player.pos, player.heading, !santa.stepEvents && playing && !G.onIce && !player.paved && player.speed > 0.3);
   fxs.puffs?.update(dt, renderer.domElement.height / (2 * Math.tan(THREE.MathUtils.degToRad(camera.fov / 2))));
   fxs.sparkles?.update(t, player.pos);
+  trail.update(dt, santa.trailKind, santa.root.position, player.heading, player.speed, playing);
   fxs.waves.update(dt);
   for (const L of fxs.snowLayers) L.s.update(t, L.near ? camera.position : _v0.set(camera.position.x, 0, camera.position.z), G.storm, G.weather);
   G.flash = Math.max(0, (G.flash || 0) - dt * 2.2);
@@ -1141,13 +1449,20 @@ function debugAPI() {
   return {
     G, player, CONFIG, renderer, world, santa, scene, camera, post, get hud() { return hud; }, get nav() { return nav; },
     get state() { return G.state; },
-    resolveWindows: async (rects) => { const { resolveWindows } = await import('./interiors.js?v=8fa77074'); const out = {}; for (const b of world.buildings) { if (!b.isGLB || out[b.type] || !rects[b.type]) continue; out[b.type] = resolveWindows(b.holder.children[0], b.holder, rects[b.type]); } return out; },
-    facadeShots: async (side = 0, mask = false) => { const { facadeShot } = await import('./interiors.js?v=8fa77074'); const out = {}; for (const b of world.buildings) { if (!b.isGLB || out[b.type]) continue; out[b.type] = facadeShot(b.holder.children[0], b.holder, renderer, side, 48, mask); } return out; },
+    cosmetics, progress, showUnlocks, openWardrobe, closeWardrobe, WD, lb, openBoard, closeBoard, tryLook: (ids) => { const L = cosmetics.look(); for (const id of ids) { const it = BY_ID[id]; L[it.slot] = it; } applyLook(santa, L); return Object.values(L).map(i => i.id); },
+    resolveWindows: async (rects) => { const { resolveWindows } = await import('./interiors.js?v=0063fe52'); const out = {}; for (const b of world.buildings) { if (!b.isGLB || out[b.type] || !rects[b.type]) continue; out[b.type] = resolveWindows(b.holder.children[0], b.holder, rects[b.type]); } return out; },
+    facadeShots: async (side = 0, mask = false) => { const { facadeShot } = await import('./interiors.js?v=0063fe52'); const out = {}; for (const b of world.buildings) { if (!b.isGLB || out[b.type]) continue; out[b.type] = facadeShot(b.holder.children[0], b.holder, renderer, side, 48, mask); } return out; },
     // dev: detect lit window rects on each Tripo building type (output -> assets/windows.js)
-    detectWindows: async () => { const { detectWindows } = await import('./interiors.js?v=8fa77074'); const out = {}; for (const b of world.buildings) { if (!b.isGLB || out[b.type]) continue; const o = b.holder.children[0]; out[b.type] = detectWindows(o, b.holder, renderer); } return out; },
+    detectWindows: async () => { const { detectWindows } = await import('./interiors.js?v=0063fe52'); const out = {}; for (const b of world.buildings) { if (!b.isGLB || out[b.type]) continue; const o = b.holder.children[0]; out[b.type] = detectWindows(o, b.holder, renderer); } return out; },
     start: (lv = 0) => { G.qaMute = true; initAudio(false); startLevel(lv); },
+    // stage beatability: road-graph route estimate vs timer for one stage (i) or all of them
+    routeCheck: (i = null) => { const sp = spawnPoint(); const one = k => routeCheck(graph, planStage(world, graph, k, sp), sp); return i == null ? CONFIG.levels.map((_, k) => one(k)) : one(i); },
+    get obstacles() { return obstacles; }, graph: () => graph, plan: (i) => planStage(world, graph, i, spawnPoint()), intros: (i) => stageIntros(i),
+    hit: (kind = 'plow') => hitPlayer(kind, { nx: 1, nz: 0, steal: 2, msg: 'QA hit' }),
     input, player, G,
     completeLevel: () => { for (const tg of G.targets) deliver(tg); },
+    lastRun: () => G.lastRun, cardInfo: () => G.lastCardInfo && { ...G.lastCardInfo, portrait: !!G.lastCardInfo.portrait }, cardPNG: () => G.lastCard?.toDataURL('image/png'),
+    fail: () => { G.timer = 0.01; },
     deliverSome: (n) => { G.targets.filter(t => !t.delivered).slice(0, n).forEach(deliver); },
     givePowerup: () => { const p = G.powerups.find(p => p.active) || G.powerups[0]; pickPowerup(p); },
     teleport: (x, z, heading) => { player.pos.set(x, 0, z); if (heading !== undefined) { player.heading = heading; cam.yaw = heading; } cam.pos.set(x, 30, z); },

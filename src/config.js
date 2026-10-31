@@ -13,6 +13,7 @@ export const CONFIG = {
     // final level is cleared. Real figure is 3M+ today and will change in
     // December — just edit these numbers/labels.
     targetStakedEth: 3_000_000,
+    shareUrl: 'https://cryptosundayz.github.io/xmas-play-21463b/', // score card + Post on X link
     targetLabel: '3M+ ETH staked', // free text shown on title + ending screens
     scoreLabel: 'Staked ETH',
     scoreUnit: 'ETH',
@@ -43,6 +44,11 @@ export const CONFIG = {
     trail: true, // blue light trail behind Santa while boosted
   },
 
+  // ------------------------------------------------------------- leaderboard
+  // url '' = local mode (this device's runs + "Global leaderboard coming online"). Set it to the deployed Worker /
+  // Supabase function base URL to go global (see server/README.md). Public URL only: no keys or secrets here.
+  leaderboard: { url: '', timeoutMs: 6000 },
+
   // ------------------------------------------------------------- difficulty
   // Presets only scale numbers at runtime -> no asset regeneration needed.
   difficulty: 'normal',
@@ -52,14 +58,31 @@ export const CONFIG = {
     hard:   { timerMult: 0.78, holdMult: 1.3, speedMult: 0.96, powerupDurationMult: 0.75, powerupCountAdd: -1, stormMult: 1.4, iceSlipMult: 1.25, slowNodeMult: 1.3 },
   },
 
-  // ----------------------------------------------------------------- levels
-  // validators: number of marked houses; timer: seconds; areaRadius: radius
-  // (world units, from the town square) inside which targets are picked.
-  // powerups: Optimum pickups spawned on roads; powerupDuration: seconds.
+  // ----------------------------------------------------------------- levels (stages)
+  // validators: marked houses · timer: seconds · areaMin/areaRadius: ring (m from the square) the houses are picked in
+  // powerups / powerupDuration: Optimum pickups · weather: CONFIG.weather.presets key
+  // ice/iceCount, slowNodes: classic obstacles · obs: new obstacles (src/obstacles.js), each introduced once with a toast
+  //   fences (jump them) · plows (patrol a street) · snowballs (roll down the main streets) · lag (Gossip-latency zones)
+  //   barriers (closed roads, detour) · wind (gusts) · grinch (bots that steal seconds) · chimneys (jump to deliver) · boss
+  // timers were tuned against the road-graph route check (tools: __xmas.routeCheck(), qa/stages_check.py): the
+  // slack (timer + delivery bonuses) / (street-only best route) falls from ~2.7 on stage 1 to ~1.6 on the finale.
   levels: [
-    { name: 'Genesis Eve',      validators: 6,  timer: 110, areaRadius: 62,  powerups: 2, powerupDuration: 10, weather: 'clear',     ice: false, slowNodes: 0, iceCount: 0 },
-    { name: 'Frosty Finality',  validators: 9,  timer: 130, areaRadius: 98, powerups: 3, powerupDuration: 10, weather: 'lightSnow', ice: true,  slowNodes: 2, iceCount: 10 },
-    { name: 'Silent Slot',      validators: 13, timer: 150, areaRadius: 125, powerups: 3, powerupDuration: 9,  weather: 'storms',    ice: true,  slowNodes: 4, iceCount: 16 },
+    { name: 'Genesis Eve',       validators: 5,  timer: 100,  areaMin: 20, areaRadius: 62,  powerups: 2, powerupDuration: 10, weather: 'clear',     slowNodes: 0, iceCount: 0,  obs: {} },
+    { name: 'First Frost',       validators: 7,  timer: 95, areaMin: 20, areaRadius: 70,  powerups: 2, powerupDuration: 10, weather: 'lightSnow', slowNodes: 0, iceCount: 8,  obs: {} },
+    { name: 'Frosty Finality',   validators: 8,  timer: 120, areaMin: 20, areaRadius: 82,  powerups: 2, powerupDuration: 10, weather: 'lightSnow', slowNodes: 2, iceCount: 8,  obs: {} },
+    { name: 'Picket Pass',       validators: 9,  timer: 140, areaMin: 30, areaRadius: 98,  powerups: 3, powerupDuration: 10, weather: 'clear',     slowNodes: 1, iceCount: 6,  obs: { fences: 7 } },
+    { name: 'Silent Slot',       validators: 10, timer: 145, areaMin: 20, areaRadius: 100, powerups: 3, powerupDuration: 10, weather: 'storms',    slowNodes: 2, iceCount: 8,  obs: { fences: 4 } },
+    { name: 'Plow Patrol',       validators: 10, timer: 155, areaMin: 30, areaRadius: 100, powerups: 3, powerupDuration: 9,  weather: 'lightSnow', slowNodes: 2, iceCount: 6,  obs: { plows: 3, fences: 4 } },
+    { name: 'Avalanche Avenue',  validators: 11, timer: 135, areaMin: 20, areaRadius: 100, powerups: 3, powerupDuration: 9,  weather: 'lightSnow', slowNodes: 2, iceCount: 8,  obs: { snowballs: 5, plows: 1 } },
+    { name: 'Gossip Gridlock',   validators: 12, timer: 170, areaMin: 20, areaRadius: 110, powerups: 3, powerupDuration: 9,  weather: 'night',     slowNodes: 3, iceCount: 6,  obs: { lag: 5, fences: 5 } },
+    { name: 'Road Works',        validators: 12, timer: 150, areaMin: 30, areaRadius: 110, powerups: 3, powerupDuration: 9,  weather: 'lightSnow', slowNodes: 2, iceCount: 8,  obs: { barriers: 3, lag: 2, plows: 2 } },
+    { name: 'Gale Force',        validators: 13, timer: 160, areaMin: 20, areaRadius: 115, powerups: 3, powerupDuration: 9,  weather: 'storms',    slowNodes: 3, iceCount: 10, obs: { wind: 1, fences: 6, snowballs: 3 } },
+    { name: 'Midnight Blizzard', validators: 13, timer: 135, areaMin: 20, areaRadius: 115, powerups: 3, powerupDuration: 9,  weather: 'blizzard',  slowNodes: 3, iceCount: 10, obs: { plows: 2, snowballs: 3, barriers: 2 } },
+    { name: 'Grinch Raid',       validators: 14, timer: 155, areaMin: 20, areaRadius: 118, powerups: 3, powerupDuration: 9,  weather: 'night',     slowNodes: 3, iceCount: 6,  obs: { grinch: 3, fences: 5, lag: 2 } },
+    { name: 'Chimney Run',       validators: 14, timer: 135, areaMin: 20, areaRadius: 118, powerups: 3, powerupDuration: 8,  weather: 'lightSnow', slowNodes: 2, iceCount: 8,  obs: { chimneys: 5, grinch: 2, wind: 1, plows: 2 } },
+    { name: 'Lakeside Lockdown', validators: 15, timer: 120, areaMin: 50, areaRadius: 125, powerups: 3, powerupDuration: 8,  weather: 'storms',    slowNodes: 3, iceCount: 18, obs: { barriers: 4, grinch: 2, snowballs: 3, lag: 2 } },
+    { name: 'Fork Choice',       validators: 16, timer: 150, areaMin: 20, areaRadius: 125, powerups: 3, powerupDuration: 8,  weather: 'blizzard',  slowNodes: 4, iceCount: 10, obs: { lag: 4, barriers: 3, wind: 1, plows: 3, grinch: 3, chimneys: 3, fences: 6 } },
+    { name: 'The Merge',         validators: 20, timer: 155, areaMin: 20, areaRadius: 125, powerups: 4, powerupDuration: 8,  weather: 'night',     slowNodes: 4, iceCount: 12, obs: { boss: 1, grinch: 2, plows: 2, snowballs: 3, fences: 6, chimneys: 4, lag: 3 }, finale: true },
   ],
 
   // -------------------------------------------------------------- character
@@ -138,6 +161,34 @@ export const CONFIG = {
     // snowstorm timing/intensity now lives in CONFIG.weather.storm (levels opt in through their weather preset)
     ice: { minRadius: 3.5, maxRadius: 6.5 },
     slowNode: { flickerHz: 7 },
+    // new obstacles (src/obstacles.js). hitInvuln: seconds of mercy after any hit; stun: seconds without control
+    hitInvuln: 1.6, stun: 0.45, knockback: 9,
+    fence: { h: 1.0, overhang: 1.8, minGap: 14 },                       // jump clears h (jump apex ~1.5 m)
+    barrier: { overhang: 2.8, block: 5.5 },                             // never jumpable; placed only where every house stays reachable
+    plow: { speed: 6.2, honkDist: 14, steal: 0 },
+    snowball: { speed: 7.5, rMin: 0.55, rMax: 1.05, gap: [2.5, 5] },     // grows while rolling: jump the small ones, dodge the big ones
+    lag: { radius: 5.5, speedMult: 0.5, holdMult: 1.6 },                // mump2p routes around lag (no slowdown while boosted)
+    wind: { every: [9, 14], warn: 1.4, dur: 2.6, push: 3.6 },
+    grinch: { speed: 7.2, sight: 26, leash: 40, steal: 4, rest: 6 },
+    chimney: { minJump: 0.9 },
+    boss: { speed: 5.8, wakeAt: 10, slamEvery: 7, slamRange: 30, waveR: 24, waveT: 1.6, steal: 6, slamSteal: 3 },
+  },
+  // first stage that uses an obstacle shows this intro card (icon · title · one line)
+  intros: {
+    ice:      ['🧊', 'Black ice', 'Ice patches on the cobbles: you slide. Ease off early before the doors.'],
+    slow:     ['🐢', 'Slow nodes', 'Flickering orange houses take longer to sync and you cannot jump while holding.'],
+    fences:   ['🚧', 'Picket fences', 'Fences cross the streets. Jump (Space / JUMP) to clear them.'],
+    storms:   ['🌨️', 'Snowstorms', 'Storm bursts roll in: fog and wind. Follow the beacons.'],
+    plows:    ['🚜', 'Snowplows', 'Plows patrol the streets. Listen for the horn and step aside.'],
+    snowballs:['⛄', 'Rolling snowballs', 'Snowballs roll down the main streets. Jump the small ones, dodge the big ones.'],
+    lag:      ['📡', 'Gossip latency', 'Red lag zones slow you and the delivery. mump2p routes around lag.'],
+    night:    ['🌑', 'Moonless night', 'It is darker tonight. Trust the beacons and the minimap.'],
+    barriers: ['⛔', 'Road works', 'Closed roads you cannot jump. Check the minimap and take a detour.'],
+    wind:     ['💨', 'Wind gusts', 'Gusts shove you sideways. Watch the warning and lean into it.'],
+    blizzard: ['❄️', 'Blizzard', 'Thick, constant snow. Visibility is short.'],
+    grinch:   ['👾', 'Grinch bots', 'Green bots chase you and steal 4 seconds. Outrun them with a sprint.'],
+    chimneys: ['🏠', 'Chimney drops', 'Gold houses take the gift down the chimney: jump at the door.'],
+    boss:     ['👹', 'The Reorg Grinch', 'The boss hunts you, steals 6 s and slams shockwaves. Jump the waves!'],
   },
 
   // ---------------------------------------------------------------- weather
@@ -152,6 +203,8 @@ export const CONFIG = {
       clear:     { fog: 0.0042, snow: 0.3,  wind: 0.08, fall: 0.85, storms: false },
       lightSnow: { fog: 0.0062, snow: 0.75, wind: 0.22, fall: 1.0,  storms: false },
       storms:    { fog: 0.0055, snow: 0.55, wind: 0.2,  fall: 1.0,  storms: true },
+      night:     { fog: 0.0075, snow: 0.45, wind: 0.12, fall: 0.9,  storms: false, dark: 0.32 },  // moonless: dimmer sky light, beacons do the work
+      blizzard:  { fog: 0.0150, snow: 1.0,  wind: 0.75, fall: 1.9,  storms: true, dark: 0.12 },   // permanent heavy snow + storm bursts
     },
     storm: { fog: 0.05, snow: 1.0, wind: 1.0, fall: 2.4, rampIn: 4.0, rampOut: 6.0, firstAt: 22, every: 38, duration: 14 },
     presetBlend: 1.5,                 // seconds to blend fog/snow/wind when the level (preset) changes
