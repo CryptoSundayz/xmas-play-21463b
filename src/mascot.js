@@ -48,6 +48,7 @@ function buildGoggle({ proxy, lx, ly, k, frontZ, hc }) {
 const CLS = { OTHER: 0, RED: 1, FUR: 2, BLACK: 3, WHITE: 4, EDGE: 5 };
 const v0 = new THREE.Vector3(), v1 = new THREE.Vector3(), v2 = new THREE.Vector3(), q0 = new THREE.Quaternion(), q1 = new THREE.Quaternion();
 const _qa = new THREE.Quaternion(), _va = new THREE.Vector3();
+const _eu = new THREE.Euler();
 const findBone = (model, n) => { let b = null; model.traverse(o => { if (!b && o.isBone && o.name.replace(/[^a-z0-9]/gi, '').toLowerCase().endsWith(n.toLowerCase())) b = o; }); return b; };
 
 // ---------------------------------------------------------------- materials
@@ -531,10 +532,19 @@ export function glbMascot(root, glb, entry, gift, makeCarryIK, quality = 'high')
     if (act.run) { act.run.setEffectiveWeight(W.run * ground); act.run.timeScale += (tsR - act.run.timeScale) * kts; }
     if (act.jump) act.jump.setEffectiveWeight(W.jump);
     mixer.update(dt);
-    if (feet && st.amp > 1.001 && !api.extAir) for (const Lg of feet.legs) { // stride amplification (longer steps, same cadence)
-      _qa.copy(Lg.rest).invert().multiply(Lg.b.quaternion); const ang = 2 * Math.acos(THREE.MathUtils.clamp(_qa.w, -1, 1));
-      if (ang > 1e-4) { _va.set(_qa.x, _qa.y, _qa.z).normalize(); _qa.setFromAxisAngle(_va, Math.min(2.6, ang * st.amp)); Lg.b.quaternion.copy(Lg.rest).multiply(_qa); }
+    if (feet) for (const Lg of feet.legs) { // running centre of each leg bone's swing (the clip's mean pose, not the bind pose)
+      if (!Lg.mean) Lg.mean = Lg.b.quaternion.clone(); else Lg.mean.slerp(Lg.b.quaternion, 1 - Math.exp(-dt * 1.5));
     }
+    if (feet && st.amp > 1.001 && !api.extAir) for (const Lg of feet.legs) { // stride amplification (longer steps, same cadence)
+      // amplify only the swing about the cycle centre, along the shortest arc, with a hard cap: amplifying the
+      // offset from the bind pose (old code) could flip a >180 deg quaternion and leave one leg stuck pointing back
+      const knee = /Leg$/.test(Lg.b.name) && !/UpLeg$/.test(Lg.b.name);
+      const amp = 1 + (st.amp - 1) * (knee ? 0.4 : 1);
+      _qa.copy(Lg.mean).invert().multiply(Lg.b.quaternion); if (_qa.w < 0) { _qa.x = -_qa.x; _qa.y = -_qa.y; _qa.z = -_qa.z; _qa.w = -_qa.w; }
+      const ang = 2 * Math.acos(THREE.MathUtils.clamp(_qa.w, -1, 1));
+      if (ang > 1e-4) { _va.set(_qa.x, _qa.y, _qa.z).normalize(); _qa.setFromAxisAngle(_va, Math.min(ang * amp, ang + 0.45, 1.2)); Lg.b.quaternion.copy(Lg.mean).multiply(_qa); }
+    }
+
 
     // -- jump / hop
     if (st.air) {
@@ -560,10 +570,10 @@ export function glbMascot(root, glb, entry, gift, makeCarryIK, quality = 'high')
     // -- head bob / look into the turn (on top of the clip)
     if (head) {
       const bob = Math.sin(st.ph * 2) * C.headBob * Math.min(1, speed / 6) + Math.sin(st.t * 1.7) * 0.02;
-      q0.setFromEuler(new THREE.Euler(bob - st.pitch * 0.6, THREE.MathUtils.clamp(turn * 0.08, -0.35, 0.35), -st.lean * 0.5));
+      q0.setFromEuler(_eu.set(bob - st.pitch * 0.6, THREE.MathUtils.clamp(turn * 0.08, -0.35, 0.35), -st.lean * 0.5));
       head.quaternion.multiply(q0);
     }
-    if (spine2) { q0.setFromEuler(new THREE.Euler(0, 0, -st.lean * 0.4)); spine2.quaternion.multiply(q0); }
+    if (spine2) { q0.setFromEuler(_eu.set(0, 0, -st.lean * 0.4)); spine2.quaternion.multiply(q0); }
     model.updateMatrixWorld(true);
     // -- foot grounding: put the lowest boot sole exactly on the surface (root y = ground), emit plant events
     if (feet) {

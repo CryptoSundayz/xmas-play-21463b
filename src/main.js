@@ -12,7 +12,8 @@ import { HUD } from './hud.js';
 import { Snow, Particles, Flights, Fireworks } from './effects.js';
 import { makeLogoMesh, logoSVG } from './logo.js';
 import { WINDOW_WARM, WINDOW_BLUE } from './materials.js';
-import { initAudio, sfx, music, audioState, configureAudio } from './audio.js';
+import { InstanceCuller } from './lowcull.js';
+import { initAudio, sfx, music, audioState, configureAudio, audioStatus, renderEndingOffline } from './audio.js';
 import { rng, clamp, lerp, damp, angleDamp, angleDiff, glowTexture, textTexture, worldUV } from './util.js';
 
 applyUrlOverrides();
@@ -29,6 +30,22 @@ const $ = id => document.getElementById(id);
 // ------------------------------------------------------------- renderer
 const canvas = $('c');
 const renderer = new THREE.WebGLRenderer({ canvas, antialias: Q.antialias, powerPreference: 'high-performance' });
+// ---- NaN-proof GLSL (Mac/Metal black patches): every shader the renderer compiles (three chunks, our ShaderMaterials,
+// post passes) gets a safe normalize (zero-length -> 0 instead of NaN) and a safe pow (negative/zero base clamped);
+// on Metal fast-math those NaNs survive into the HDR buffer and bloom smears them into black rectangles.
+{
+  const gl = renderer.getContext(), src0 = gl.shaderSource.bind(gl);
+  const DEF = '#define SN(v) ((v) * inversesqrt(max(dot((v), (v)), 1e-12)))\n#define SPOW(a, b) pow(max((a), 1e-6), (b))\n#define RSTEP(a, b, x) (1.0 - smoothstep((a), (b), (x)))\n';
+  gl.shaderSource = (sh, src) => {
+    if (CONFIG.debug?.unsafeGLSL) return src0(sh, src);
+    let s = src.replace(/\bnormalize\s*\(/g, 'SN(').replace(/\bpow\s*\(/g, 'SPOW(')
+      // smoothstep(e0, e1, x) with e0 >= e1 is undefined in GLSL (Metal may return garbage) -> 1 - smoothstep(e1, e0, x)
+      .replace(/\bsmoothstep\s*\(\s*(-?[\d.]+)\s*,\s*(-?[\d.]+)\s*,/g, (all, a, b) => (+a >= +b ? `RSTEP(${b}, ${a},` : all));
+    const m = s.match(/^\s*#version[^\n]*\n/);
+    s = m ? m[0] + DEF + s.slice(m[0].length) : DEF + s;
+    return src0(sh, s);
+  };
+}
 // ---- robust sizing: visualViewport (iOS address bar / rotation), drawing buffer capped to the GPU limits + a pixel budget
 const PERF = CONFIG.performance;
 const GL_MAX = (() => { const gl = renderer.getContext(); return Math.min(gl.getParameter(gl.MAX_RENDERBUFFER_SIZE), gl.getParameter(gl.MAX_TEXTURE_SIZE), ...(gl.getParameter(gl.MAX_VIEWPORT_DIMS) || [16384])); })();
@@ -40,7 +57,7 @@ function viewSize() {
 }
 function pixelRatioFor(w, h) {
   let pr = Math.min(devicePixelRatio || 1, Q.pixelRatio) * dynScale;
-  const budget = Q.mobile ? PERF.maxPixels.mobile : PERF.maxPixels.desktop;
+  const budget = Q.ios ? PERF.ios.maxPixels : Q.mobile ? PERF.maxPixels.mobile : PERF.maxPixels.desktop;
   pr = Math.min(pr, Math.sqrt(budget / (w * h)), (GL_MAX - 2) / w, (GL_MAX - 2) / h);
   return Math.max(0.35, pr);
 }
@@ -55,7 +72,7 @@ const scene = new THREE.Scene();
 const FOG_COLOR = new THREE.Color(CONFIG.weather.fogColor), STORM_FOG = new THREE.Color(CONFIG.weather.stormFogColor);
 scene.fog = new THREE.FogExp2(FOG_COLOR.clone(), CONFIG.weather.presets.clear.fog);
 scene.background = FOG_COLOR.clone();
-const camera = new THREE.PerspectiveCamera(CONFIG.camera.fov, innerWidth / innerHeight, 0.2, 900);
+const camera = new THREE.PerspectiveCamera(CONFIG.camera.fov, innerWidth / innerHeight, 0.1, 900);
 
 // moonlight
 const hemi = new THREE.HemisphereLight(0x4a66b8, 0x2a2232, 0.66); scene.add(hemi);
@@ -87,7 +104,7 @@ addEventListener('orientationchange', () => { applySize(); setTimeout(() => appl
 window.visualViewport?.addEventListener('resize', () => applySize());
 document.addEventListener('fullscreenchange', () => setTimeout(() => applySize(true), 100));
 // WebGL context loss (iOS backgrounding / GPU reset): stop, tell the player, reload on restore
-canvas.addEventListener('webglcontextlost', e => { e.preventDefault(); G.contextLost = true; const d = document.createElement('div'); d.id = 'ctxLost'; d.textContent = 'Graphics were reset by the device - tap to reload'; d.onclick = () => location.reload(); document.body.appendChild(d); }, false);
+canvas.addEventListener('webglcontextlost', e => { e.preventDefault(); G.contextLost = true; window.__toast?.('WebGL context lost (GPU reset / memory pressure)'); const d = document.createElement('div'); d.id = 'ctxLost'; d.textContent = 'Graphics were reset by the device - tap to reload'; d.onclick = () => location.reload(); document.body.appendChild(d); }, false);
 canvas.addEventListener('webglcontextrestored', () => location.reload(), false);
 // runtime fallback for weak devices (only when quality = auto)
 const governor = new Governor(!Q.auto || QA_FIXED_EARLY ? [] : [
@@ -165,6 +182,7 @@ async function boot() {
   };
   if (Q.sparkle) fxs.sparkles = new Sparkles(scene, Q.name === 'high' ? 1800 : 1000);
   fxs.waves = new Shockwaves(scene);
+  if (Q.name === 'low') applyLow(true);
   particles = new Particles(scene, 2500, 0.35);
   fireworksParticles = new Particles(scene, 7000, 0.9);
   flights = new Flights(scene, particles);
@@ -183,7 +201,46 @@ async function boot() {
   requestAnimationFrame(loop);
 }
 
+// LOW preset extras (load time for ?quality=low, or live when LOW is picked in the menu - no reload):
+// no composer (direct renderer.render, so no bloom / NaN pass / luminance probe), no shadows, no point lights,
+// pixel ratio 1 (0.75 on >=3x phones), per-house static merge, distance-culled instancing, near LOD switch,
+// short draw distance hidden in fog. The governor / dynamic resolution never touch an explicit preset.
+let culler = null, lowApplied = false, lowChunkInfo = null;
+function applyLow(atLoad = false) {
+  if (lowApplied) return; lowApplied = true;
+  const L = CONFIG.qualityPresets.low;
+  if (!atLoad) { // live switch: copy the preset over the running Q
+    Object.assign(Q, L, { name: 'low', auto: false });
+    if (Q.mobile && (devicePixelRatio || 1) >= 3) Q.pixelRatio = 0.75;
+  }
+  post.enabled = false;                                  // renderer.render direct
+  renderer.shadowMap.enabled = false; moon.castShadow = false;
+  for (const l of lightPool) { l.intensity = 0; l.visible = false; }
+  lightPool.length = 0; if (giftLight) giftLight.visible = false;
+  for (const k of ['cones', 'smoke', 'sparkles']) { const f = fxs[k]; const o = f?.mesh || f?.points || f?.group; if (o) o.visible = false; }
+  for (const L2 of fxs.snowLayers || []) L2.s.points && (L2.s.points.visible = false);
+  dyn.on = false; dynScale = 1; governor.steps.length = 0;
+  document.body.classList.add('cssVignette');
+  lowChunkInfo = world.chunkStatic(L.chunkCell ?? 40, !!L.bakeInstances); console.info('[low] chunks', lowChunkInfo);
+  scene.traverse(o => { if (o.isLOD && o.levels.length > 1) o.levels[1].distance = Math.min(o.levels[1].distance, L.lodDistance ?? 26); });
+  const holders = new Set(world.buildings.map(b => b.holder)), props = [], _bs = new THREE.Box3(), _sz = new THREE.Vector3();
+  for (const c of world.root.children) {
+    if (holders.has(c) || c === world.lowChunks || c.isInstancedMesh || c.isPoints || /snowTerrain|stringLights|road|path/i.test(c.name || '')) continue;
+    let inst = false; c.traverse(o => { if (o.isInstancedMesh || o.isPoints) inst = true; }); if (inst) continue;
+    _bs.setFromObject(c).getSize(_sz); if (_sz.x > 24 || _sz.z > 24) continue;
+    props.push(c);
+  }
+  culler = new InstanceCuller(scene, { radius: L.cullRadius ?? 55, props, propRadius: L.propRadius ?? 55 });
+  camera.far = L.far ?? 160; camera.updateProjectionMatrix();
+  if (!atLoad) scene.traverse(o => { if (o.material) [].concat(o.material).forEach(m => m.needsUpdate = true); }); // lights/shadows changed
+  applySize(true);
+}
 function bindUI() {
+  $('selQuality').addEventListener('change', e => { // LOW applies live; other presets rebuild the world on Play
+    if (e.target.value !== 'low') return;
+    applyLow(); CONFIG.quality = 'low';
+    const u = new URL(location.href); u.searchParams.set('quality', 'low'); history.replaceState(null, '', u.toString());
+  });
   $('playBtn').onclick = () => {
     const q = $('selQuality').value;
     CONFIG.difficulty = $('selDifficulty').value;
@@ -226,8 +283,8 @@ function bindPauseSliders() {
 function bindAudioUI() {
   configureAudio(CONFIG.audio);
   // browsers only allow audio after a gesture: start the context + title music on the first one
-  const first = () => { if (CONFIG.audio?.enabled === false || G.qaMute) return; initAudio(CONFIG.audio); if (!music.current) music.play(G.state === 'title' ? 'title' : G.state === 'ending' ? 'ending' : 'game'); removeEventListener('pointerdown', first, true); removeEventListener('keydown', first, true); };
-  addEventListener('pointerdown', first, true); addEventListener('keydown', first, true);
+  const first = () => { if (CONFIG.audio?.enabled === false || G.qaMute) return; initAudio(CONFIG.audio); if (!music.current) music.play(G.state === 'title' ? 'title' : G.state === 'ending' ? 'ending' : 'game'); for (const ev of ['pointerup', 'touchend', 'click', 'keydown']) removeEventListener(ev, first, true); };
+  for (const ev of ['pointerup', 'touchend', 'click', 'keydown']) addEventListener(ev, first, true);
   addEventListener('keydown', e => { if (e.code === 'KeyM' && !e.repeat) { audioState.toggleMute(); bindPauseSliders(); } });
   $('muteBtn').onclick = e => { e.stopPropagation(); audioState.toggleMute(); bindPauseSliders(); };
   audioState.onChange(a => { $('muteBtn').textContent = a.muted ? '🔇' : '🔊'; $('muteBtn').classList.toggle('off', a.muted); });
@@ -254,7 +311,10 @@ function bindScreenUI() {
     setTimeout(() => { $('iosTip').classList.add('hidden'); localStorage.setItem('xmas.iosTip', '1'); }, 14000);
   }
   let portraitOK = sessionStorage.getItem('xmas.portrait') === '1';
-  const rot = () => { const show = isTouch && !portraitOK && innerHeight > innerWidth * 1.15; $('rotateHint').classList.toggle('hidden', !show); };
+  // portrait: a non-blocking hint card (the game stays playable underneath); fades out by itself after 6 s
+  let rotT = 0;
+  const rot = () => { const show = isTouch && !portraitOK && innerHeight > innerWidth * 1.15; $('rotateHint').classList.toggle('hidden', !show);
+    clearTimeout(rotT); if (show) rotT = setTimeout(() => { portraitOK = true; $('rotateHint').classList.add('hidden'); }, 6000); };
   $('rotateX').onclick = () => { portraitOK = true; sessionStorage.setItem('xmas.portrait', '1'); rot(); };
   addEventListener('resize', rot); addEventListener('orientationchange', () => setTimeout(rot, 300)); rot();
 }
@@ -272,8 +332,15 @@ function resetPlayer() {
   santa.root.position.copy(player.pos); santa.root.rotation.y = player.heading;
 }
 
+// per-level markers/rings/labels own their geometry + material: free them on level change (leak audit);
+// module-shared materials stay alive (they are reused by the next level).
+function disposeLevelObj(o) {
+  const keep = new Set([beamMat, beaconMat, beaconMatSlow, world?.M?.ice, _proxyMat]);
+  o.traverse(m => { if (m.geometry && !m.geometry.userData?.shared) m.geometry.dispose(); for (const x of [].concat(m.material || [])) if (!keep.has(x)) x.dispose(); });
+}
+const _camW = new THREE.Vector3(), _camL = new THREE.Vector3(), _ORIGIN = new THREE.Vector3(); // per-frame scratch (no GC churn)
 function clearLevel() {
-  for (const o of G.levelObjects) { o.parent?.remove(o); }
+  for (const o of G.levelObjects) { o.parent?.remove(o); disposeLevelObj(o); }
   G.levelObjects = []; G.targets = []; G.powerups = []; G.ice = []; fxs.sparkles?.setIce([]); fxs.feet?.reset();
   flights?.clear();
   G.mumpLeft = 0; G.gossipBusy = false;
@@ -346,7 +413,7 @@ const beamMat = new THREE.ShaderMaterial({
   uniforms: { uC: { value: new THREE.Color(0x3fb6ff) }, uT: { value: 0 } },
   vertexShader: 'varying vec2 vUv; varying float vD; void main(){ vUv = uv; vec4 mv = modelViewMatrix*vec4(position,1.0); vD = -mv.z; gl_Position = projectionMatrix*mv; }',
   // fades out when the camera is right next to / inside the beam (no full-screen glare)
-  fragmentShader: 'varying vec2 vUv; varying float vD; uniform vec3 uC; uniform float uT; void main(){ float a = pow(1.0-vUv.y, 2.2)*0.32*(0.8+0.2*sin(uT*3.0+vUv.y*20.0)) * smoothstep(1.5, 7.0, vD); gl_FragColor = vec4(uC*1.6, a); }',
+  fragmentShader: 'varying vec2 vUv; varying float vD; uniform vec3 uC; uniform float uT; void main(){ float a = pow(clamp(1.0-vUv.y, 0.0, 1.0), 2.2)*0.32*(0.8+0.2*sin(uT*3.0+vUv.y*20.0)) * smoothstep(1.5, 7.0, vD); gl_FragColor = vec4(uC*1.6, a); }',
 });
 const ringShader = (color) => new THREE.ShaderMaterial({
   transparent: true, depthWrite: false, blending: THREE.AdditiveBlending,
@@ -358,7 +425,7 @@ const beaconShader = (hex) => new THREE.ShaderMaterial({
   transparent: true, depthWrite: false, blending: THREE.AdditiveBlending, side: THREE.DoubleSide, fog: false,
   uniforms: { uC: { value: new THREE.Color(hex) }, uT: beamMat.uniforms.uT },
   vertexShader: 'varying vec2 vUv; varying float vD; void main(){ vUv = uv; vec4 mv = modelViewMatrix*vec4(position,1.0); vD = -mv.z; gl_Position = projectionMatrix*mv; }',
-  fragmentShader: 'varying vec2 vUv; varying float vD; uniform vec3 uC; uniform float uT; void main(){ float a = pow(1.0-vUv.y, 1.4)*smoothstep(0.0, 0.06, vUv.y)*(0.85+0.15*sin(uT*2.0-vUv.y*30.0)) * mix(0.14, 0.6, smoothstep(12.0, 80.0, vD)); gl_FragColor = vec4(uC*1.4, a); }',
+  fragmentShader: 'varying vec2 vUv; varying float vD; uniform vec3 uC; uniform float uT; void main(){ float a = pow(clamp(1.0-vUv.y, 0.0, 1.0), 1.4)*smoothstep(0.0, 0.06, vUv.y)*(0.85+0.15*sin(uT*2.0-vUv.y*30.0)) * mix(0.14, 0.6, smoothstep(12.0, 80.0, vD)); gl_FragColor = vec4(uC*1.4, a); }',
 });
 const beaconMat = beaconShader(0x3fb6ff), beaconMatSlow = beaconShader(0xffa63a);
 let slowTex = null;
@@ -501,7 +568,7 @@ function updatePlayer(dt) {
   G.onIce = ice;
 }
 
-function setFov(f, dt) { const n = camera.fov + (f - camera.fov) * (1 - Math.exp(-3 * dt)); if (Math.abs(n - camera.fov) > 0.01) { camera.fov = n; camera.updateProjectionMatrix(); } }
+function setFov(f, dt) { if (!Number.isFinite(f)) f = CONFIG.camera.fov; f = Math.min(110, Math.max(20, f)); if (!Number.isFinite(camera.fov)) camera.fov = f; const n = camera.fov + (f - camera.fov) * (1 - Math.exp(-3 * Math.min(0.1, Math.max(0, dt || 0)))); if (Math.abs(n - camera.fov) > 0.01) { camera.fov = n; camera.updateProjectionMatrix(); } }
 function updateCamera(dt, t) {
   const C = CONFIG.camera;
   if (G.camOverride) { // QA / photo mode
@@ -525,7 +592,7 @@ function updateCamera(dt, t) {
   if (G.state === 'levelComplete' || G.state === 'gameOver') {
     // hero orbit around Santa
     cam.orbit = (cam.orbit ?? cam.yaw + Math.PI) + dt * 0.25;
-    const want = new THREE.Vector3(player.pos.x + Math.sin(cam.orbit) * 7.5, 3.2, player.pos.z + Math.cos(cam.orbit) * 7.5);
+    const want = _camW.set(player.pos.x + Math.sin(cam.orbit) * 7.5, 3.2, player.pos.z + Math.cos(cam.orbit) * 7.5);
     cam.pos.lerp(want, 1 - Math.exp(-2.5 * dt)); cam.look.lerp(_v0.set(player.pos.x, 1.4, player.pos.z), 1 - Math.exp(-4 * dt));
     camera.position.copy(cam.pos); camera.lookAt(cam.look); setFov(45, dt); return;
   }
@@ -533,8 +600,8 @@ function updateCamera(dt, t) {
   if (G.state === 'ending') {
     setFov(52, dt);
     const a = 0.7 + G.endingT * 0.05, r = 78;
-    const want = new THREE.Vector3(Math.cos(a) * r, 22 + Math.min(G.endingT, 6) * 2, Math.sin(a) * r);
-    cam.pos.lerp(want, 1 - Math.exp(-1.5 * dt)); cam.look.lerp(new THREE.Vector3(0, 26, 0), 1 - Math.exp(-1.5 * dt));
+    const want = _camW.set(Math.cos(a) * r, 22 + Math.min(G.endingT, 6) * 2, Math.sin(a) * r);
+    cam.pos.lerp(want, 1 - Math.exp(-1.5 * dt)); cam.look.lerp(_v0.set(0, 26, 0), 1 - Math.exp(-1.5 * dt));
     camera.position.copy(cam.pos); camera.lookAt(cam.look);
     fireworks.facing.set(cam.pos.x, 0, cam.pos.z).normalize();
     return;
@@ -548,7 +615,7 @@ function updateCamera(dt, t) {
   }
   // look down the street ahead of Santa (more when running); FOV opens on sprint and kicks on BOOSTED
   const ahead = C.lookAhead + Math.min(2.5, player.speed * 0.2);
-  const look = new THREE.Vector3(player.pos.x + Math.sin(cam.yaw) * ahead, C.lookHeight, player.pos.z + Math.cos(cam.yaw) * ahead);
+  const look = _camL.set(player.pos.x + Math.sin(cam.yaw) * ahead, C.lookHeight, player.pos.z + Math.cos(cam.yaw) * ahead);
   cam.kick = Math.max(0, (cam.kick || 0) - dt * 1.6);
   // portrait phones: widen the vertical FOV so the horizontal view isn't a keyhole
   const portrait = camera.aspect < 0.9 ? 1.32 : 1;
@@ -558,19 +625,64 @@ function updateCamera(dt, t) {
   let dist = C.distance * (1 - storm * 0.15) * (camera.aspect < 0.9 ? 1.3 : 1);
   const rx = -Math.cos(cam.yaw), rz = Math.sin(cam.yaw); // camera-right on the ground plane
   const sh = C.shoulder * (camera.aspect < 0.9 ? 0.3 : 1);
-  // camera collision: march from Santa's head back toward the desired (over-the-shoulder) camera position
+  // camera collision: (1) collider march from Santa's head back toward the desired over-the-shoulder spot, then
+  // (2) a real raycast against the nearby house meshes (eaves, porches, signs, lamps the footprint boxes miss),
+  // so the near plane never slices into a wall/roof (= the big straight-edged dark rectangles while orbiting).
   let allowed = dist;
-  for (let i = 1; i <= 12; i++) {
-    const k = i / 12, s = dist * k, h = 1.6 + (C.height - 1.6) * k;
-    if (world.blocksCamera(player.pos.x - fx * s + rx * sh * k, h, player.pos.z - fz * s + rz * sh * k)) { allowed = Math.max(2.2, dist * (i - 1) / 12); break; }
+  for (let i = 1; i <= 16; i++) {
+    const k = i / 16, s = dist * k, h = 1.6 + (C.height - 1.6) * k;
+    if (world.blocksCamera(player.pos.x - fx * s + rx * sh * k, h, player.pos.z - fz * s + rz * sh * k)) { allowed = Math.max(1.2, dist * (i - 1) / 16); break; }
   }
-  cam.dist = damp(cam.dist, allowed, allowed < cam.dist ? 20 : 3, dt);
+  allowed = Math.min(allowed, camRayLimit(fx, fz, rx, rz, sh, dist));
+  // pull in fast, ease back out slowly (frame-rate independent)
+  cam.dist = damp(cam.dist, allowed, allowed < cam.dist ? 22 : 3, dt);
+  if (cam.dist > allowed + 0.25) cam.dist = allowed + 0.25;
   const r = cam.dist / dist;
-  const want = new THREE.Vector3(player.pos.x - fx * cam.dist + rx * sh * r, C.height + (1 - r) * 0.9, player.pos.z - fz * cam.dist + rz * sh * r);
-  cam.pos.lerp(want, 1 - Math.exp(-C.followLerp * dt));
-  if (cam.pos.distanceTo(want) > 30) cam.pos.copy(want);
+  // position comes straight from the (already damped) yaw + distance: no second cartesian lerp, so the camera never
+  // cuts a chord through geometry when it swings, and there is no double smoothing (micro-stutter)
+  cam.h = damp(cam.h ?? C.height, C.height + (1 - r) * 0.9, 8, dt);
+  cam.pos.set(player.pos.x - fx * cam.dist + rx * sh * r, cam.h, player.pos.z - fz * cam.dist + rz * sh * r);
   cam.look.lerp(look, 1 - Math.exp(-12 * dt));
+  if (!Number.isFinite(cam.pos.x + cam.pos.y + cam.pos.z + cam.look.x + cam.look.y + cam.look.z)) { cam.pos.set(player.pos.x - fx * dist, C.height, player.pos.z - fz * dist); cam.look.copy(look); }
   camera.position.copy(cam.pos); camera.lookAt(cam.look);
+}
+
+const _proxyMat = new THREE.MeshBasicMaterial({ side: THREE.DoubleSide }), _crl = { t: -1, yaw: 0, x: 0, z: 0, v: 99 };
+const _ray = new THREE.Raycaster(), _ro = new THREE.Vector3(), _rd = new THREE.Vector3(), _rt = new THREE.Vector3(), _near = [];
+function camRayLimit(fx, fz, rx, rz, sh, dist) {
+  // throttled: re-cast at most every 40 ms unless the camera swung / Santa moved noticeably
+  const now = performance.now();
+  if (now - _crl.t < 40 && Math.abs(angleDiff(_crl.yaw, cam.yaw)) < 0.04 && Math.hypot(_crl.x - player.pos.x, _crl.z - player.pos.z) < 0.3) return _crl.v;
+  _crl.t = now; _crl.yaw = cam.yaw; _crl.x = player.pos.x; _crl.z = player.pos.z;
+  return (_crl.v = camRayCast(fx, fz, rx, rz, sh, dist));
+}
+function camRayCast(fx, fz, rx, rz, sh, dist) {
+  const C = CONFIG.camera; _ro.set(player.pos.x, 1.6, player.pos.z);
+  _rt.set(player.pos.x - fx * dist + rx * sh, C.height, player.pos.z - fz * dist + rz * sh);
+  _rd.subVectors(_rt, _ro); const L = _rd.length(); _rd.divideScalar(L);
+  _near.length = 0;
+  for (const b of world.buildings) { if (b.holder && Math.hypot(b.x - player.pos.x, b.z - player.pos.z) < L + 16) _near.push(b.camProxy ||= camProxyOf(b)); }
+  if (world.camBlockers) for (const o of world.camBlockers) if (Math.hypot(o.position.x - player.pos.x, o.position.z - player.pos.z) < L + 4) _near.push(o);
+  if (!_near.length) return dist;
+  _ray.set(_ro, _rd); _ray.far = L + 0.6; _ray.near = 0;
+  // near-plane half-diagonal (~0.12 m at near 0.1) + margin: stop 0.45 m before the first surface
+  let best = dist;
+  for (const o of _near) { const h = _ray.intersectObject(o, true); if (h.length) best = Math.min(best, Math.max(0.9, (h[0].distance - 0.45) * dist / L)); }
+  return best;
+}
+// cheapest mesh set per house for camera rays: the LOD's lowest level + the non-LOD parts (signs, porches, decor)
+function camProxyOf(b) {
+  const g = new THREE.Group(); g.matrixAutoUpdate = false;
+  const parts = []; b.holder.updateMatrixWorld(true);
+  b.holder.traverse(o => {
+    if (o.isLOD) return;
+    for (let p = o.parent; p && p !== b.holder; p = p.parent) if (p.isLOD) return;
+    if ((o.isMesh && !o.isInstancedMesh && !o.isSkinnedMesh && !o.userData.noSnap && !(o.material?.transparent && o.material?.depthWrite === false))) parts.push(o);
+  });
+  b.holder.traverse(o => { if (o.isLOD) { const lv = o.levels[o.levels.length - 1]?.object; lv?.traverse(m => { if (m.isMesh) parts.push(m); }); } });
+  for (const m of parts) { const c = new THREE.Mesh(m.geometry, _proxyMat); c.matrixAutoUpdate = false; c.matrix.copy(m.matrixWorld); c.matrixWorld.copy(m.matrixWorld); c.raycast = THREE.Mesh.prototype.raycast; g.add(c); }
+  g.updateMatrixWorld = () => {}; // matrices are baked world-space
+  return g;
 }
 
 function deliver(t) {
@@ -613,7 +725,7 @@ function makeBoostTrail() {
     transparent: true, depthWrite: false, blending: THREE.AdditiveBlending, side: THREE.DoubleSide,
     uniforms: { uC: { value: new THREE.Color(0x3fb6ff) } },
     vertexShader: 'attribute float aA; attribute float aS; varying float vA; varying float vY; void main(){ vA = aA; vY = aS; gl_Position = projectionMatrix*modelViewMatrix*vec4(position,1.0); }',
-    fragmentShader: 'uniform vec3 uC; varying float vA; varying float vY; void main(){ float e = 1.0 - abs(vY*2.0-1.0); float c = pow(e, 2.5); gl_FragColor = vec4(uC*1.6 + vec3(0.5,0.8,1.0)*c, vA*c); }',
+    fragmentShader: 'uniform vec3 uC; varying float vA; varying float vY; void main(){ float e = 1.0 - abs(vY*2.0-1.0); float c = pow(max(e, 0.0), 2.5); gl_FragColor = vec4(uC*1.6 + vec3(0.5,0.8,1.0)*c, vA*c); }',
   });
   const mesh = new THREE.Mesh(geo, mat); mesh.frustumCulled = false; mesh.visible = false;
   const pts = []; let acc = 0, level = 0;
@@ -764,7 +876,7 @@ function updateStorm(dt) {
   } else { G.storm = damp(G.storm, 0, 1.0, dt); G.stormLin = G.storm; }
   const st = G.storm;
   G.weather = { fog: lerp(G.wx.fog, S.fog, Math.pow(st, 1.3)), snow: lerp(G.wx.snow, S.snow, st), wind: lerp(G.wx.wind, S.wind, st), fall: lerp(G.wx.fall, S.fall, st) };
-  scene.fog.density = G.weather.fog;
+  scene.fog.density = Math.max(G.weather.fog, lowApplied ? (CONFIG.qualityPresets.low.fogMin ?? 0) : 0);
   scene.fog.color.copy(FOG_COLOR).lerp(STORM_FOG, st); scene.background.copy(scene.fog.color);
   world.sky.material.uniforms.uStorm && (world.sky.material.uniforms.uStorm.value = st);
   hemi.intensity = 0.66 - st * 0.12;
@@ -827,15 +939,47 @@ const QA_FIXED = !!params.get('qa');
 let simOnly = false;
 // dynamic resolution: frame-time EMA -> render scale (auto quality only, never in QA); the feature governor
 // only kicks in once the scale is already at its floor
-const dyn = { ema: 1000 / 60, acc: 0, good: 0, on: PERF.dynamicResolution && Q.auto && !QA_FIXED_EARLY };
+const dyn = { ema: 1000 / 60, acc: 0, good: 0, bad: 0, last: -99, on: PERF.dynamicResolution && Q.auto && !QA_FIXED_EARLY };
 function perfCtl(d) {
   const ms = d * 1000; if (ms <= 0 || ms > 250) return;
   dyn.ema += (ms - dyn.ema) * 0.08; dyn.acc += d;
   if (!dyn.on || dyn.acc < 1) return; dyn.acc = 0;
-  const budget = 1000 / PERF.targetFps;
-  if (dyn.ema > budget * 1.1 && dynScale > PERF.minScale) { dynScale = Math.max(PERF.minScale, dynScale - (dyn.ema > budget * 1.6 ? 0.15 : 0.07)); dyn.good = 0; applySize(); }
-  else if (dyn.ema < budget * 0.82) { if (++dyn.good >= 3 && dynScale < PERF.maxScale) { dynScale = Math.min(PERF.maxScale, dynScale + 0.05); dyn.good = 0; applySize(); } }
-  else dyn.good = 0;
+  // hysteresis: a resize re-allocates every render target (a hitch by itself), so only step after 2 bad / 6 good
+  // seconds in a row, never more than once per 4 s, with a wide dead band (0.75x..1.15x of the frame budget)
+  const budget = 1000 / PERF.targetFps, now = performance.now() / 1000;
+  if (dyn.ema > budget * 1.15) { dyn.good = 0; if (++dyn.bad >= 2 && dynScale > PERF.minScale && now - dyn.last > 4) { dynScale = Math.max(PERF.minScale, dynScale - (dyn.ema > budget * 1.6 ? 0.15 : 0.07)); dyn.bad = 0; dyn.last = now; applySize(); } }
+  else if (dyn.ema < budget * 0.75) { dyn.bad = 0; if (++dyn.good >= 6 && dynScale < PERF.maxScale && now - dyn.last > 4) { dynScale = Math.min(PERF.maxScale, dynScale + 0.05); dyn.good = 0; dyn.last = now; applySize(); } }
+  else { dyn.good = 0; dyn.bad = 0; }
+}
+// black-band safety net: every ~2 s read a 12x8 grid of canvas pixels right after the frame; if a wide
+// band of columns on one side is pure black while the rest is lit, twice in a row, switch off the next
+// suspect post pass (bloom -> grade -> whole composer). Logged to console + __xmas.fx().blackProbe.
+const BP = { next: 3, hits: 0, steps: [], px: new Uint8Array(4), off: 0, enabled: params.get('probe') === '1' };
+const BP_STEPS = [
+  { name: 'bloom off', apply: () => post.setBloom(false) },
+  { name: 'grade/final pass off', apply: () => { if (post.final) post.final.enabled = false; } },
+  { name: 'post stack off', apply: () => { post.enabled = false; } },
+];
+function blackProbe(t) {
+  if (!post.enabled || BP.off >= BP_STEPS.length || t < BP.next || (G.state !== 'playing' && G.state !== 'title')) return;
+  BP.next = t + 2;
+  const gl = renderer.getContext(), W = gl.drawingBufferWidth, H = gl.drawingBufferHeight, NX = 12, NY = 8;
+  const dark = new Array(NX).fill(0); let lit = 0;
+  try {
+    for (let i = 0; i < NX; i++) for (let j = 0; j < NY; j++) {
+      gl.readPixels(Math.floor((i + 0.5) * W / NX), Math.floor((j + 0.5) * H / NY), 1, 1, gl.RGBA, gl.UNSIGNED_BYTE, BP.px);
+      const s = BP.px[0] + BP.px[1] + BP.px[2];
+      if (s <= 3) dark[i]++; else if (s > 30) lit++;
+    }
+  } catch (e) { BP.off = BP_STEPS.length; return; }
+  const full = dark.map(d => d >= NY - 1);
+  let left = 0; while (left < NX && full[left]) left++;
+  let right = 0; while (right < NX && full[NX - 1 - right]) right++;
+  const band = Math.max(left, right);
+  const allDark = dark.every(d => d >= NY - 1) && G.state === 'playing';
+  if ((band >= 3 && band < NX && lit >= 6) || allDark) {
+    if (++BP.hits >= 2) { const s = BP_STEPS[BP.off++]; s.apply(); BP.steps.push(s.name); BP.hits = 0; console.warn('[blackProbe] black band ' + band + '/12 cols -> ' + s.name); window.__toast?.('Render glitch detected - ' + s.name, 'info'); }
+  } else BP.hits = 0;
 }
 // ?debug=1 overlay: fps / frame ms / draw calls / triangles / render scale / governor steps
 let dbgEl = null, dbgT = 0;
@@ -844,15 +988,20 @@ function debugOverlay(d) {
   if (!dbgEl) { dbgEl = document.createElement('div'); dbgEl.id = 'dbgFps'; document.body.appendChild(dbgEl); renderer.info.autoReset = false; }
   dbgT += d; if (dbgT < 0.5) { renderer.info.reset(); return; } dbgT = 0;
   const I = renderer.info.render, sz = renderer.getDrawingBufferSize(new THREE.Vector2());
-  dbgEl.textContent = `${(1000 / dyn.ema).toFixed(0)} fps · ${dyn.ema.toFixed(1)} ms\n${I.calls} calls · ${(I.triangles / 1e6).toFixed(2)}M tris\n${Q.name}${Q.auto ? ' (auto)' : ''} · scale ${dynScale.toFixed(2)} · ${sz.x}x${sz.y}\n${governor.applied.join(', ') || 'no fallbacks'}`;
+  dbgEl.textContent = `${(1000 / dyn.ema).toFixed(0)} fps · ${dyn.ema.toFixed(1)} ms\n${I.calls} calls · ${(I.triangles / 1e6).toFixed(2)}M tris\n${Q.name}${Q.auto ? ' (auto)' : ''} · composer ${post.enabled ? 'on' : 'off'} · scale ${dynScale.toFixed(2)} · ${sz.x}x${sz.y}\n${governor.applied.join(', ') || 'no fallbacks'}`;
   renderer.info.reset();
 }
+let sdt = 1 / 60;
 function loop() {
   requestAnimationFrame(loop);
   if (G.contextLost) return;
   const d = clock.getDelta();
   perfCtl(d); debugOverlay(d);
-  frame(QA_FIXED ? 1 / 30 : Math.min(0.05, d));
+  // rAF timestamps jitter by +-1-2 ms (more on 120 Hz ProMotion / vsync-off Macs). Feeding raw dt makes motion
+  // visibly uneven at ~80 fps; a light EMA that snaps on real changes keeps speed exact over time but smooth.
+  const dc = Math.min(0.05, d);
+  sdt = Math.abs(dc - sdt) > sdt * 0.5 ? dc : sdt + (dc - sdt) * 0.3;
+  frame(QA_FIXED ? 1 / 30 : sdt);
 }
 function frame(dt) {
   t += dt;
@@ -891,7 +1040,7 @@ function frame(dt) {
   if (shardOrbit.visible) shardOrbit.children.forEach(m => { const a = m.userData.a + t * 4; m.position.set(Math.cos(a) * 0.55, Math.sin(a * 2 + m.userData.tilt) * 0.25, Math.sin(a) * 0.55); m.rotation.y = a * 2; });
   // lights / shadow follow
   lightT -= dt; if (lightT <= 0) { lightT = 0.12; updateLightPool(); }
-  const focus = G.state === 'playing' || G.state === 'paused' || G.state === 'levelComplete' || G.state === 'gameOver' ? player.pos : new THREE.Vector3();
+  const focus = G.state === 'playing' || G.state === 'paused' || G.state === 'levelComplete' || G.state === 'gameOver' ? player.pos : _ORIGIN;
   moon.position.set(focus.x + 35, 70, focus.z + 22); moon.target.position.copy(focus);
   snow.update(t, _v0.set(camera.position.x, 0, camera.position.z), G.storm, G.weather);
   if (G.state !== 'title' && G.state !== 'ending') {
@@ -915,7 +1064,9 @@ function frame(dt) {
   const dofFocus = G.state === 'title' ? cam.pos.distanceTo(cam.look) : G.state === 'ending' ? 200 : camDist;
   post.update(t, { focus: dofFocus, boost: G.mumpLeft > 0 ? 0.6 + 0.4 * Math.sin(t * 4) : 0, flash: G.flash, storm: G.storm });
   if (simOnly) return;
+  culler?.update(dt, camera);
   post.render();
+  if (BP.enabled) blackProbe(t); // opt-in (?probe=1): its synchronous readPixels stalled the GPU pipeline every 2 s (periodic hitch)
   music.setBoost(G.state === 'playing' && G.mumpLeft > 0); sfx.wind(G.state === 'playing' || G.state === 'paused' ? (G.storm || 0) : 0.15);
   governor.tick(dt, (G.state === 'playing' || G.state === 'title') && (!dyn.on || dynScale <= PERF.minScale + 1e-3));
   post.setCinematic(G.state === 'title' || G.state === 'levelComplete' || G.state === 'ending' || G.state === 'intro');
@@ -947,8 +1098,14 @@ function debugAPI() {
     windowInfo: i => interiors?.info(i),
     nearSnow: v => fxs.snowLayers.forEach(L => { if (L.near) L.s.points.visible = !!v; }),
     cam: (pos, look, fov, rel = false) => { G.camOverride = pos ? { pos, look, fov, rel } : null; },
-    fx: () => ({ quality: Q, governor: governor.applied, chimneys: world.buildings.filter(b => b.chimney).length, lamps: fxs.cones?.lamps.length || 0, env: !!scene.environment }),
+    injectNaN: on => { world.sky.material.uniforms.uNaN.value = on ? 1 : 0; return true; },
+    sanitize: on => { if (post.sanitize) post.sanitize.enabled = on; return on; },
+    audio: () => audioStatus(),
+    audioOffline: (sec = 20, legacy = false, rate = 2.2) => renderEndingOffline(sec, legacy, rate),
+    nanView: on => { post.nanView(on); return !!post.sanitize; },
+    fx: () => ({ blackProbe: BP.steps, quality: Q, governor: governor.applied, chimneys: world.buildings.filter(b => b.chimney).length, lamps: fxs.cones?.lamps.length || 0, env: !!scene.environment }),
     santaPos: () => player.pos.toArray(),
+    camYaw: (y) => { if (y !== undefined) { cam.yaw = y; input.lastManualCam = performance.now(); } return { yaw: cam.yaw, dist: +cam.dist.toFixed(2), h: +(cam.h ?? 0).toFixed(2), pos: camera.position.toArray().map(v => +v.toFixed(2)), fov: +camera.fov.toFixed(1), near: camera.near }; },
     advance: (sec, step = 1 / 30) => { simOnly = true; try { for (let i = 0; i < Math.round(sec / step); i++) frame(step); } finally { simOnly = false; } return G.state; },
     // one fully rendered frame, all passes (shadow + scene + post): draw calls / triangles / pixel size
     pines: () => pines?.stats(),
@@ -959,11 +1116,11 @@ function debugAPI() {
     decorGaps: (g, s) => world.decorGaps(g, s),
     floatingDecor: () => world.floatingDecor(pines ? pines.trees.map(t => ({ kind: t.mini ? 'miniTree' : 'pine', x: t.x, y: t.y, z: t.z })) : []),
     stats: () => {
-      const I = renderer.info; I.autoReset = false; I.reset(); renderer.shadowMap.needsUpdate = true; post.render(); const all = { calls: I.render.calls, triangles: I.render.triangles };
+      culler?.update(1, camera); const I = renderer.info; I.autoReset = false; I.reset(); renderer.shadowMap.needsUpdate = true; post.render(); const all = { calls: I.render.calls, triangles: I.render.triangles };
       I.reset(); const sm = renderer.shadowMap.autoUpdate; renderer.render(scene, camera); const sc = { calls: I.render.calls, triangles: I.render.triangles }; I.autoReset = true;
       let meshes = 0, inst = 0, lights = 0; scene.traverseVisible(o => { if (o.isMesh || o.isPoints || o.isLine) meshes++; if (o.isInstancedMesh) inst += o.count; if (o.isLight && o.intensity > 0) lights++; });
       const sz = renderer.getDrawingBufferSize(new THREE.Vector2());
-      return { quality: Q.name, pixelRatio: renderer.getPixelRatio(), buffer: [sz.x, sz.y], shadowMap: moon.shadow.mapSize.x, shadows: renderer.shadowMap.enabled, msaa: Q.msaa, ao: !!post.ao?.enabled, dof: !!post.final?.uniforms.uDof?.value, frame: all, sceneOnly: sc, visibleObjects: meshes, instances: inst, lights, programs: I.programs?.length, textures: I.memory.textures, geometries: I.memory.geometries };
+      return { quality: Q.name, post: post.enabled, lowApplied, lowChunkInfo, culled: culler ? culler.list.length : 0, far: camera.far, pixelRatio: renderer.getPixelRatio(), buffer: [sz.x, sz.y], shadowMap: moon.shadow.mapSize.x, shadows: renderer.shadowMap.enabled, msaa: Q.msaa, ao: !!post.ao?.enabled, dof: !!post.final?.uniforms.uDof?.value, frame: all, sceneOnly: sc, visibleObjects: meshes, instances: inst, lights, programs: I.programs?.length, textures: I.memory.textures, geometries: I.memory.geometries };
     },
     // triangle budget by object (visible, in-frustum), largest first
     breakdown: (top = 25) => {

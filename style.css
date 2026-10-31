@@ -185,3 +185,67 @@ body.touch #fsBtn { top:auto; bottom:calc(318px + env(safe-area-inset-bottom)); 
 .screen .card { max-height: calc(100dvh - env(safe-area-inset-top) - env(safe-area-inset-bottom) - 16px); overflow-y:auto; }
 #pauseAudio { display:grid; grid-template-columns:auto 1fr; gap:6px 12px; align-items:center; margin:10px auto 4px; max-width:300px; font-size:13px; }
 #pauseAudio input { width:100%; }
+
+/* error toast (bottom-centre above controls, safe-area aware) */
+#errToast { position: fixed; left: 50%; transform: translateX(-50%); top: calc(8px + env(safe-area-inset-top)); z-index: 300; display: flex; flex-direction: column; gap: 6px; max-width: min(92vw, 560px); pointer-events: auto; }
+#errToast .errItem { background: rgba(120, 20, 30, 0.92); color: #fff; font: 500 12px/1.35 system-ui, sans-serif; padding: 7px 11px; border-radius: 9px; box-shadow: 0 4px 14px rgba(0,0,0,.4); word-break: break-word; }
+#errToast .errItem.info { background: rgba(20, 50, 90, 0.92); }
+
+/* ================= mobile HUD v2 (touch devices): compact, safe-area aware, nothing over the thumbs ================= */
+body.touch { --sat: env(safe-area-inset-top); --sab: env(safe-area-inset-bottom); --sal: env(safe-area-inset-left); --sar: env(safe-area-inset-right); }
+body.touch .panel { border-radius:11px; box-shadow:0 3px 12px rgba(0,0,0,.3); }
+body.touch .lbl { font-size:9px; letter-spacing:.1em; }
+body.touch #hudScore { top:calc(8px + var(--sat)); left:calc(8px + var(--sal)); padding:5px 9px; min-width:0; max-width:48vw; }
+body.touch #hudScore .big { font-size:18px; } body.touch #hudScore .unit { font-size:11px; } body.touch #hudScore .sub { font-size:9.5px; }
+body.touch #hudTimer { top:calc(8px + var(--sat)); right:calc(8px + var(--sar)); padding:5px 9px; min-width:0; }
+body.touch #hudTimer .big { font-size:18px; } body.touch #hudTimer .sub { font-size:9px; } body.touch #hudTimer .lbl { font-size:8.5px; }
+/* latency bars collapse into a mini pill: only the active network + its ms */
+body.touch #hudCompare { top:calc(62px + var(--sat)); left:calc(8px + var(--sal)); bottom:auto; transform:none; width:auto; padding:3px 9px; border-radius:20px; display:flex; }
+body.touch #hudCompare .row { display:none; padding:0; font-size:11px; gap:6px; background:none !important; box-shadow:none !important; }
+body.touch #hudCompare .row.active { display:flex; } body.touch #hudCompare .bar { display:none; }
+body.touch #hudCompare .name, body.touch #hudCompare .ms { width:auto; }
+body.touch #rowGossip.active .ms { color:#ff9aa5; } body.touch #rowOptimum.active .ms { color:var(--green); }
+body.touch #mumpTag { position:static; margin-left:6px; font-size:10px; padding:1px 6px; display:none; }
+body.touch #hudCompare.mump #mumpTag { display:inline-block; }
+/* minimap: small, top-right under the timer */
+body.touch #hudMap { top:calc(60px + var(--sat)); right:calc(8px + var(--sar)); left:auto; bottom:auto; padding:3px; }
+body.touch #minimap { width:96px; height:96px; }
+/* icon row: top-right, under the minimap */
+body.touch .hudBtn, body.touch #pauseBtn { width:32px; height:32px; font-size:14px; }
+body.touch #pauseBtn { top:calc(166px + var(--sat)); bottom:auto; left:auto; right:calc(84px + var(--sar)); }
+body.touch #muteBtn { top:calc(166px + var(--sat)); bottom:auto; left:auto; right:calc(46px + var(--sar)); }
+body.touch #fsBtn { top:calc(166px + var(--sat)); bottom:auto; left:auto; right:calc(8px + var(--sar)); }
+body.touch #housesLeft { top:calc(92px + var(--sat)); font-size:12px; padding:3px 10px; }
+/* power-up card -> small auto-hiding toast, top centre */
+body.touch #hudPower { top:calc(122px + var(--sat)); bottom:auto; left:50%; right:auto; transform:translateX(-50%); min-width:0; max-width:64vw; padding:4px 10px; gap:6px; border-radius:16px;
+  opacity:0; transition:opacity .35s; pointer-events:none; }
+body.touch #hudPower.on, body.touch #hudPower.peek { opacity:1; }
+body.touch #hudPower .logoSlot, body.touch #hudPower .lbl { display:none; }
+body.touch #powerState { font-size:11px; margin:0 0 3px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+body.touch #hudPower .pbar { width:100%; height:4px; }
+body.touch #hudPower:not(.on) .pbar { display:none; }
+body.touch #combo { top:calc(206px + var(--sat)); right:calc(10px + var(--sar)); } body.touch #combo .cb-main { font-size:24px; }
+body.touch #stormWarn { top:calc(150px + var(--sat)); font-size:11px; }
+body.touch #toast { font-size:20px; top:28%; }
+/* thumbs: joystick 116 px bottom-left, JUMP 80 px bottom-right */
+body.touch #joyBase { left:calc(18px + var(--sal)); bottom:calc(18px + var(--sab)); width:116px; height:116px; }
+body.touch #joyKnob { left:31px; top:31px; width:50px; height:50px; }
+body.touch #jumpBtn { right:calc(22px + var(--sar)); bottom:calc(30px + var(--sab)); width:80px; height:80px; font-size:13px; }
+/* portrait rotate hint: a small card that never blocks play */
+#rotateHint { inset:auto; left:50%; top:42%; transform:translate(-50%,-50%); width:min(300px,80vw); padding:14px 16px; gap:6px; border-radius:16px; background:rgba(5,11,24,.72);
+  border:1px solid rgba(143,220,255,.3); font-size:13px; pointer-events:none; animation: rotFade 6s ease forwards; }
+#rotateHint .rotIco { font-size:30px; } #rotateHint button { pointer-events:auto; margin-top:2px; padding:5px 12px; font-size:12px; }
+@keyframes rotFade { 0%,80% { opacity:1 } 100% { opacity:0 } }
+/* phone landscape: short screen, wide -> spread across the top edge */
+@media (max-height: 500px) {
+  body.touch #hudCompare { top:calc(8px + var(--sat)); left:50%; transform:translateX(-50%); }
+  body.touch #housesLeft { top:calc(36px + var(--sat)); }
+  body.touch #hudPower { top:calc(64px + var(--sat)); }
+  body.touch #hudMap { top:calc(58px + var(--sat)); } body.touch #minimap { width:84px; height:84px; }
+  body.touch #pauseBtn, body.touch #muteBtn, body.touch #fsBtn { top:calc(62px + var(--sat)); right:auto; }
+  body.touch #pauseBtn { left:calc(8px + var(--sal)); } body.touch #muteBtn { left:calc(46px + var(--sal)); } body.touch #fsBtn { left:calc(84px + var(--sal)); }
+  body.touch #combo { top:calc(150px + var(--sat)); }
+  body.touch #stormWarn { top:calc(92px + var(--sat)); }
+  body.touch #joyBase { width:110px; height:110px; } body.touch #joyKnob { left:29px; top:29px; }
+  body.touch #jumpBtn { width:78px; height:78px; bottom:calc(22px + var(--sab)); }
+}

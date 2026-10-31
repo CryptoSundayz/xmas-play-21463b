@@ -17,29 +17,87 @@ export function configureAudio(c) { // CONFIG.audio = true | false | { enabled, 
   cfg = typeof c === 'object' && c ? c : { enabled: c !== false };
   if (localStorage.getItem(LS) == null) { if (cfg.music != null) st.music = cfg.music; if (cfg.sfx != null) st.sfx = cfg.sfx; }
 }
+// iOS: Web Audio follows the ring/silent switch ("ambient") unless the page is a media-playback session.
+// Safari 17+: navigator.audioSession.type = 'playback'. Older iOS: a looping silent <audio> element (a tiny
+// generated WAV, no codec issues) playing from a gesture moves the page into the playback category.
+let silentEl = null;
+function silentWav() {
+  const n = 2205, b = new ArrayBuffer(44 + n * 2), v = new DataView(b), w = (o, s) => [...s].forEach((c, i) => v.setUint8(o + i, c.charCodeAt(0)));
+  w(0, 'RIFF'); v.setUint32(4, 36 + n * 2, true); w(8, 'WAVE'); w(12, 'fmt '); v.setUint32(16, 16, true); v.setUint16(20, 1, true); v.setUint16(22, 1, true);
+  v.setUint32(24, 22050, true); v.setUint32(28, 44100, true); v.setUint16(32, 2, true); v.setUint16(34, 16, true); w(36, 'data'); v.setUint32(40, n * 2, true);
+  return URL.createObjectURL(new Blob([b], { type: 'audio/wav' }));
+}
+export function unlockAudioGesture() { // call synchronously inside a click/touchend handler
+  try { if (navigator.audioSession) navigator.audioSession.type = 'playback'; } catch (e) { /* ignore */ }
+  try {
+    if (!silentEl) { silentEl = document.createElement('audio'); silentEl.src = silentWav(); silentEl.loop = true; silentEl.setAttribute('playsinline', ''); silentEl.volume = 0.01; }
+    const p = silentEl.play(); if (p && p.catch) p.catch(() => {});
+  } catch (e) { /* ignore */ }
+  if (ctx) {
+    if (ctx.state !== 'running') ctx.resume().catch?.(() => {});
+    try { const b = ctx.createBuffer(1, 1, 22050), s = ctx.createBufferSource(); s.buffer = b; s.connect(ctx.destination); s.start(0); } catch (e) { /* ignore */ }
+  }
+}
+export function audioStatus() { return { ctx: ctx ? ctx.state : 'none', sampleRate: ctx?.sampleRate ?? null, baseLatency: ctx?.baseLatency ?? null, limiter: !legacy, session: navigator.audioSession?.type || 'n/a', silentEl: silentEl ? !silentEl.paused : false, muted: st.muted }; }
+// output chain: master -> glue compressor -> brick-wall limiter -> soft clip (ceiling ~-1.1 dBFS) -> out.
+// Before: only a gentle -14 dB 3:1 compressor, so stacked fireworks + ending music could hit 0 dBFS and clip
+// (the "gresek-gresek" crackle) - and ~20 nodes per firework could overload the Mac's audio thread.
+const CEIL = 0.88; let lastFw = -1, crackBuf = null, legacy = false;
+function softClipCurve(n = 2048) { const c = new Float32Array(n); for (let i = 0; i < n; i++) { const x = i / (n - 1) * 2 - 1; c[i] = CEIL * Math.tanh(x * 1.25) / Math.tanh(1.25); } return c; }
+function buildGraph(c) {
+  master = c.createGain(); master.gain.value = (cfg?.master ?? 0.9);
+  const comp = c.createDynamicsCompressor(); comp.threshold.value = -14; comp.ratio.value = 3;
+  master.connect(comp);
+  if (legacy) comp.connect(c.destination);
+  else {
+    const lim = c.createDynamicsCompressor(); lim.threshold.value = -4; lim.knee.value = 0; lim.ratio.value = 20; lim.attack.value = 0.001; lim.release.value = 0.12;
+    const clip = c.createWaveShaper(); clip.curve = softClipCurve(); clip.oversample = '2x';
+    comp.connect(lim); lim.connect(clip); clip.connect(c.destination);
+  }
+  musicBus = c.createGain(); sfxBus = c.createGain(); boostBus = c.createGain(); boostBus.gain.value = 0;
+  musicBus.connect(master); sfxBus.connect(master); boostBus.connect(musicBus);
+  // shared noise buffer + a soft feedback-delay "room" for the music
+  noiseBuf = c.createBuffer(1, c.sampleRate * 2, c.sampleRate); const d = noiseBuf.getChannelData(0); for (let i = 0; i < d.length; i++) d[i] = Math.random() * 2 - 1;
+  // firework crackle: ONE pre-rendered buffer instead of 14 noise voices per firework. Each pop is a short damped
+  // 1.8-4.2 kHz sinusoid with a raised-cosine onset: crisp, but band-limited (no full-band digital "static" edges)
+  crackBuf = c.createBuffer(1, Math.round(c.sampleRate * 1.2), c.sampleRate); const cd = crackBuf.getChannelData(0), SR = c.sampleRate;
+  for (let k = 0; k < 22; k++) {
+    const at = Math.floor((0.05 + Math.random() * 1.05) * SR), f = 1800 + Math.random() * 2400, tau = 0.002 + Math.random() * 0.004, a = 0.35 + Math.random() * 0.4;
+    const on = Math.floor(SR * 0.0008), len = Math.floor(SR * tau * 6), ph = Math.random() * 6.283;
+    for (let i = 0; i < len && at + i < cd.length; i++) { const w = i < on ? 0.5 - 0.5 * Math.cos(Math.PI * i / on) : 1, t = i / SR;
+      cd[at + i] += a * w * Math.exp(-t / tau) * Math.sin(6.283 * f * t + ph); }
+  }
+  const dl = c.createDelay(1), fb = c.createGain(), wet = c.createGain(), lp = c.createBiquadFilter();
+  dl.delayTime.value = 0.23; fb.gain.value = 0.28; wet.gain.value = 0.22; lp.type = 'lowpass'; lp.frequency.value = 2600;
+  musicBus.connect(dl); dl.connect(lp); lp.connect(fb); fb.connect(dl); lp.connect(wet); wet.connect(master);
+  // wind bed (looping band-passed noise, level follows the storm)
+  const wn = c.createBufferSource(); wn.buffer = noiseBuf; wn.loop = true;
+  windFilt = c.createBiquadFilter(); windFilt.type = 'bandpass'; windFilt.frequency.value = 420; windFilt.Q.value = 0.7;
+  windGain = c.createGain(); windGain.gain.value = 0; wn.connect(windFilt); windFilt.connect(windGain); windGain.connect(sfxBus); wn.start();
+}
+// SFX voice cap: past maxVoices concurrent SFX sources new ones are dropped (music is never dropped)
+// (counted by scheduled end time, so it also works for sounds scheduled ahead and in an OfflineAudioContext)
+let ends = [];
+const voiceOK = (out, t0 = ctx.currentTime) => {
+  if (legacy || out !== sfxBus) return true;
+  if (ends.length > 64) ends = ends.filter(e => e > ctx.currentTime);
+  let n = 0; for (const e of ends) if (e > t0) n++; return n < (cfg?.maxVoices ?? 40);
+};
+const track = (end, out) => { if (out === sfxBus && !legacy) ends.push(end); };
 export function initAudio(on = true) {
   if (on && typeof on === 'object') { configureAudio(on); on = on.enabled !== false; }
   enabled = !!on; if (!enabled) return;
-  if (ctx) { if (ctx.state === 'suspended') ctx.resume(); return; }
+  if (ctx) { unlockAudioGesture(); return; }
   try {
-    ctx = new (window.AudioContext || window.webkitAudioContext)();
-    master = ctx.createGain(); master.gain.value = (cfg?.master ?? 0.9);
-    const comp = ctx.createDynamicsCompressor(); comp.threshold.value = -14; comp.ratio.value = 3;
-    master.connect(comp); comp.connect(ctx.destination);
-    musicBus = ctx.createGain(); sfxBus = ctx.createGain(); boostBus = ctx.createGain(); boostBus.gain.value = 0;
-    musicBus.connect(master); sfxBus.connect(master); boostBus.connect(musicBus);
-    // shared noise buffer + a soft feedback-delay "room" for the music
-    noiseBuf = ctx.createBuffer(1, ctx.sampleRate * 2, ctx.sampleRate); const d = noiseBuf.getChannelData(0); for (let i = 0; i < d.length; i++) d[i] = Math.random() * 2 - 1;
-    const dl = ctx.createDelay(1), fb = ctx.createGain(), wet = ctx.createGain(), lp = ctx.createBiquadFilter();
-    dl.delayTime.value = 0.23; fb.gain.value = 0.28; wet.gain.value = 0.22; lp.type = 'lowpass'; lp.frequency.value = 2600;
-    musicBus.connect(dl); dl.connect(lp); lp.connect(fb); fb.connect(dl); lp.connect(wet); wet.connect(master);
-    // wind bed (looping band-passed noise, level follows the storm)
-    const wn = ctx.createBufferSource(); wn.buffer = noiseBuf; wn.loop = true;
-    windFilt = ctx.createBiquadFilter(); windFilt.type = 'bandpass'; windFilt.frequency.value = 420; windFilt.Q.value = 0.7;
-    windGain = ctx.createGain(); windGain.gain.value = 0; wn.connect(windFilt); windFilt.connect(windGain); windGain.connect(sfxBus); wn.start();
+    ctx = new (window.AudioContext || window.webkitAudioContext)({ latencyHint: cfg?.latencyHint ?? 'balanced' });
+    buildGraph(ctx);
     applyVol();
-    const unlock = () => { if (ctx.state === 'suspended') ctx.resume(); };
-    addEventListener('pointerdown', unlock); addEventListener('keydown', unlock); addEventListener('touchend', unlock);
+    unlockAudioGesture();
+    // iOS only counts touchend / click / pointerup as activation (not pointerdown / touchstart)
+    const unlock = () => { if (ctx.state !== 'running' || (silentEl && silentEl.paused)) unlockAudioGesture(); };
+    for (const ev of ['touchend', 'pointerup', 'click', 'keydown']) addEventListener(ev, unlock, true);
+    document.addEventListener('visibilitychange', () => { if (!document.hidden && ctx.state !== 'running') ctx.resume().catch?.(() => {}); });
+    ctx.onstatechange = () => { if (ctx.state === 'interrupted') setTimeout(() => ctx.resume().catch?.(() => {}), 300); };
     if (pendingTrack) { const p = pendingTrack; pendingTrack = null; music.play(p); }
   } catch (e) { ctx = null; }
 }
@@ -66,17 +124,19 @@ function env(g, t0, a, peak, dec, sus = 0.0001, rel = 0) {
   if (rel) g.gain.exponentialRampToValueAtTime(0.0001, t0 + a + dec + rel);
 }
 function osc(type, f, t0, dur, vol, out, { a = 0.005, dec = dur, detune = 0, slide = 0, filter = 0 } = {}) {
+  if (!voiceOK(out, t0)) return;
   const o = ctx.createOscillator(), g = ctx.createGain(); o.type = type; o.frequency.setValueAtTime(f, t0); o.detune.value = detune;
   if (slide) o.frequency.exponentialRampToValueAtTime(slide, t0 + dur);
   env(g, t0, a, vol, dec);
   let n = o; if (filter) { const lp = ctx.createBiquadFilter(); lp.type = 'lowpass'; lp.frequency.value = filter; o.connect(lp); n = lp; }
-  n.connect(g); g.connect(out); o.start(t0); o.stop(t0 + a + dec + 0.05);
+  n.connect(g); g.connect(out); o.start(t0); o.stop(t0 + a + dec + 0.05); track(t0 + a + dec + 0.05, out);
 }
 function noise(t0, dur, vol, out, { type = 'highpass', f = 6000, q = 0.7, a = 0.002, f2 = 0 } = {}) {
+  if (!voiceOK(out, t0)) return;
   const s = ctx.createBufferSource(); s.buffer = noiseBuf; s.playbackRate.value = 0.8 + Math.random() * 0.4;
   const bq = ctx.createBiquadFilter(); bq.type = type; bq.frequency.setValueAtTime(f, t0); bq.Q.value = q; if (f2) bq.frequency.exponentialRampToValueAtTime(f2, t0 + dur);
   const g = ctx.createGain(); env(g, t0, a, vol, dur);
-  s.connect(bq); bq.connect(g); g.connect(out); s.start(t0, Math.random() * 1.5); s.stop(t0 + a + dur + 0.05);
+  s.connect(bq); bq.connect(g); g.connect(out); s.start(t0, Math.random() * 1.5); s.stop(t0 + a + dur + 0.05); track(t0 + a + dur + 0.05, out);
 }
 const V = {
   bell(m, t, d, v, out) { const f = mtof(m); osc('sine', f, t, Math.max(0.6, d * 1.6), v, out); osc('sine', f * 2.76, t, 0.35, v * 0.25, out); osc('triangle', f * 2, t, 0.5, v * 0.18, out); },
@@ -106,9 +166,9 @@ const TRACKS = {
   game: { bpm: 132, mel: JINGLE, ch: JINGLE_CH, loop: true, voice: 'bell', vol: 0.11, bassVol: 0.12, comp: 0.05, sleigh: 0.05 },
   ending: { bpm: 112, mel: WISH_END, ch: [43, 48, 53, 50, 43, 48, 53, 43, 48], loop: false, voice: 'bell', vol: 0.13, bassVol: 0.1, comp: 0.05, sleigh: 0.04, pad: 0.015 },
 };
-function schedule() {
+function schedule(until) {
   if (!cur || !ctx) return;
-  const T = cur.T, spb = 60 / T.bpm, ahead = ctx.currentTime + 0.25;
+  const T = cur.T, spb = 60 / T.bpm, ahead = until ?? ctx.currentTime + 0.25;
   while (cur.next < ahead) {
     if (cur.i >= T.mel.length) { if (!T.loop) { cur = null; return; } cur.i = 0; cur.beat = 0; cur.loopN++; }
     const [m, d] = T.mel[cur.i], t = cur.next;
@@ -174,10 +234,51 @@ export const sfx = {
   boom() { this.firework(0.6); },
   firework(v = 1, delay = 0) { // whistle up, then boom + crackle
     if (!ok()) return; const t = now() + delay;
-    osc('sine', 900, t - 0.9 < now() ? now() : t - 0.9, 0.8, 0.02 * v, sfxBus, { slide: 2400 });
-    noise(t, 0.8, 0.22 * v, sfxBus, { type: 'lowpass', f: 900, f2: 120, a: 0.004 });
-    osc('sine', 70, t, 0.6, 0.18 * v, sfxBus, { slide: 35 });
-    for (let i = 0; i < 14; i++) noise(t + 0.25 + Math.random() * 0.9, 0.03, 0.05 * v, sfxBus, { f: 5000 });
+    if (legacy) {
+      osc('sine', 900, t - 0.9 < now() ? now() : t - 0.9, 0.8, 0.02 * v, sfxBus, { slide: 2400 });
+      noise(t, 0.8, 0.22 * v, sfxBus, { type: 'lowpass', f: 900, f2: 120, a: 0.004 });
+      osc('sine', 70, t, 0.6, 0.18 * v, sfxBus, { slide: 35 });
+      for (let i = 0; i < 14; i++) noise(t + 0.25 + Math.random() * 0.9, 0.03, 0.05 * v, sfxBus, { f: 5000 });
+      return;
+    }
+    // overlapping launches (finale salvos): later ones in the same 150 ms are quieter and skip the whistle
+    const dense = t - lastFw < 0.15; lastFw = Math.max(lastFw, t);
+    v *= (cfg?.fireworkGain ?? 0.6) * (dense ? 0.5 : 1);
+    if (!dense) osc('sine', 900, Math.max(now(), t - 0.9), 0.8, 0.015 * v, sfxBus, { slide: 2400, a: 0.03 });
+    noise(t, 0.8, 0.22 * v, sfxBus, { type: 'lowpass', f: 900, f2: 120, a: 0.008 });
+    osc('sine', 70, t, 0.6, 0.16 * v, sfxBus, { slide: 35, a: 0.01 });
+    if (crackBuf && voiceOK(sfxBus, t + 0.2)) { // one source for the whole crackle tail
+      const s = ctx.createBufferSource(), g = ctx.createGain(); s.buffer = crackBuf; s.playbackRate.value = 0.9 + Math.random() * 0.2;
+      g.gain.setValueAtTime(0.0001, t + 0.2); g.gain.linearRampToValueAtTime(0.5 * v, t + 0.22); g.gain.setTargetAtTime(0.0001, t + 1.1, 0.12);
+      s.connect(g); g.connect(sfxBus); s.start(t + 0.2); s.stop(t + 1.6); track(t + 1.6, sfxBus);
+    }
   },
   wind(k) { if (!ctx || !windGain) return; const t = ctx.currentTime; windGain.gain.setTargetAtTime(enabled ? (cfg?.windBase ?? 0.025) + k * (cfg?.windStorm ?? 0.22) : 0, t, 0.4); windFilt.frequency.setTargetAtTime(380 + k * 500 + Math.sin(t * 0.7) * 120, t, 0.3); },
 };
+
+// QA: render the ending (music + a dense firework show) into an OfflineAudioContext and measure it.
+// legacyMode=true renders with the pre-fix chain (no limiter / caps, 14-voice crackle) for a before/after.
+export async function renderEndingOffline(sec = 20, legacyMode = false, fwPerSec = 2.2) {
+  const saved = { ctx, master, musicBus, sfxBus, boostBus, windGain, windFilt, noiseBuf, crackBuf, cur, enabled, legacy, lastFw, ends };
+  const SR = 48000, oc = new OfflineAudioContext(2, SR * sec, SR);
+  try {
+    legacy = legacyMode; ends = []; lastFw = -1; enabled = true; ctx = oc; buildGraph(oc);
+    musicBus.gain.value = st.music * 0.5; sfxBus.gain.value = st.sfx;
+    cur = { name: 'ending', T: TRACKS.ending, i: 0, beat: 0, loopN: 0, next: 0.12 };
+    let nodes = 0; for (const m of ['createOscillator', 'createBufferSource', 'createGain', 'createBiquadFilter']) { const f = oc[m].bind(oc); oc[m] = (...a) => { nodes++; return f(...a); }; }
+    schedule(sec); // the whole ending score up front (offline time only advances during rendering)
+    const fws = []; for (let t = 0.5; t < sec - 1.5; t += (0.6 + Math.random() * 0.9) / fwPerSec) fws.push(t);
+    for (let k = sec - 6; k < sec - 3; k += 0.08) fws.push(k); // finale salvo
+    fws.sort((x, y) => x - y); const n0 = nodes;
+    for (const t of fws) sfx.firework(0.45 + Math.random() * 0.55, t);
+    const fwNodes = nodes - n0; // offline currentTime = 0 -> delay = absolute time
+    const buf = await oc.startRendering();
+    let peak = 0, clicks = 0, clipped = 0; const thr = 0.25;
+    for (let ch = 0; ch < buf.numberOfChannels; ch++) { const d = buf.getChannelData(ch);
+      for (let i = 2; i < d.length; i++) { const a = Math.abs(d[i]); if (a > peak) peak = a; if (a >= 0.999) clipped++;
+        // click = a sample-to-sample jump far above the local slope (2nd difference)
+        if (Math.abs(d[i] - 2 * d[i - 1] + d[i - 2]) > thr) clicks++; } }
+    let rms = 0; { const d = buf.getChannelData(0); for (let i = 0; i < d.length; i++) rms += d[i] * d[i]; rms = Math.sqrt(rms / d.length); }
+    return { legacy: legacyMode, sec, sampleRate: SR, fireworks: fws.length, peak: +peak.toFixed(4), peakDbfs: +(20 * Math.log10(peak || 1e-9)).toFixed(2), rmsDbfs: +(20 * Math.log10(rms || 1e-9)).toFixed(2), clippedSamples: clipped, clicks2ndDiff: clicks, audioNodesPerFirework: +(fwNodes / fws.length).toFixed(1), maxSfxVoices: legacyMode ? 'uncapped' : (cfg?.maxVoices ?? 40) };
+  } finally { ({ ctx, master, musicBus, sfxBus, boostBus, windGain, windFilt, noiseBuf, crackBuf, cur, enabled, legacy, lastFw, ends } = saved); }
+}

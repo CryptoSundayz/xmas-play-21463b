@@ -114,18 +114,32 @@ export function snowyCobble(mat, mode, size) {
 const W = CONFIG.world;
 
 
+// quantized GLB attributes (KHR_mesh_quantization: normalized Int16/Int8, often interleaved) would clamp to [-1,1]
+// when a world matrix is baked in with applyMatrix4 -> convert position / normal / uv to plain Float32 first
+function toF32(g) {
+  for (const k of ['position', 'normal', 'uv']) {
+    const a = g.attributes[k]; if (!a || (a.array instanceof Float32Array && !a.normalized && !a.isInterleavedBufferAttribute)) continue;
+    const n = a.count, s = a.itemSize, f = new Float32Array(n * s);
+    for (let i = 0; i < n; i++) { f[i * s] = a.getX(i); if (s > 1) f[i * s + 1] = a.getY(i); if (s > 2) f[i * s + 2] = a.getZ(i); if (s > 3) f[i * s + 3] = a.getW(i); }
+    g.setAttribute(k, new THREE.BufferAttribute(f, s));
+  }
+  return g;
+}
+
 // merge a static group's single-material meshes by material (+shadow flags) -> a few draw calls per sign
-function batchByMaterial(group) {
+function batchByMaterial(group, skip = null) {
   group.updateMatrixWorld(true); const inv = new THREE.Matrix4().copy(group.matrixWorld).invert(), M = new THREE.Matrix4(), sets = new Map(), kill = [];
   group.traverse(o => {
     if (!o.isMesh || o.isInstancedMesh || o.isSkinnedMesh || Array.isArray(o.material) || o.userData.noBatch) return;
+    if (skip) { for (let p = o; p && p !== group; p = p.parent) if (skip(p)) return; }
+    if (o.morphTargetInfluences?.length || o.onBeforeRender !== THREE.Object3D.prototype.onBeforeRender) return;
     M.multiplyMatrices(inv, o.matrixWorld); if (M.determinant() < 0) return;
     let g = o.geometry.index ? o.geometry.toNonIndexed() : o.geometry.clone();
-    for (const k of Object.keys(g.attributes)) if (!['position', 'normal', 'uv'].includes(k)) g.deleteAttribute(k);
+    for (const k of Object.keys(g.attributes)) if (!['position', 'normal', 'uv'].includes(k)) g.deleteAttribute(k); toF32(g);
     if (!g.attributes.normal) g.computeVertexNormals();
     if (!g.attributes.uv) g.setAttribute('uv', new THREE.BufferAttribute(new Float32Array(g.attributes.position.count * 2), 2));
     g.morphAttributes = {}; g.clearGroups(); g.applyMatrix4(M);
-    const key = o.material.uuid + (o.castShadow ? 'c' : '') + (o.receiveShadow ? 'r' : '');
+    const key = o.material.uuid ;
     if (!sets.has(key)) sets.set(key, { mat: o.material, cs: o.castShadow, rs: o.receiveShadow, geos: [] });
     sets.get(key).geos.push(g); kill.push(o);
   });
@@ -179,16 +193,16 @@ export class World {
     const geo = new THREE.SphereGeometry(900, 32, 16);
     const mat = new THREE.ShaderMaterial({
       side: THREE.BackSide, depthWrite: false, fog: false,
-      uniforms: { uTime: { value: 0 }, uStorm: { value: 0 }, uFog: { value: this.scene.fog ? this.scene.fog.color : new THREE.Color(0x0d1a36) } },
-      vertexShader: `varying vec3 vDir; void main(){ vDir = normalize(position); vec4 p = modelViewMatrix*vec4(position,1.0); gl_Position = projectionMatrix*p; gl_Position.z = gl_Position.w; }`,
-      fragmentShader: `varying vec3 vDir; uniform float uTime; uniform float uStorm; uniform vec3 uFog;
+      uniforms: { uNaN: { value: 0 }, uTime: { value: 0 }, uStorm: { value: 0 }, uFog: { value: this.scene.fog ? this.scene.fog.color : new THREE.Color(0x0d1a36) } },
+      vertexShader: `varying vec3 vDir; void main(){ vDir = normalize(position); vec4 p = modelViewMatrix*vec4(position,1.0); gl_Position = projectionMatrix*p; gl_Position.z = gl_Position.w * 0.99995; }`,
+      fragmentShader: `varying vec3 vDir; uniform float uTime, uNaN; uniform float uStorm; uniform vec3 uFog;
         float h(vec3 p){ p = fract(p*0.3183099+.1); p*=17.0; return fract(p.x*p.y*p.z*(p.x+p.y+p.z)); }
         void main(){
           float y = clamp(vDir.y, -0.2, 1.0);
           vec3 top = vec3(0.012,0.02,0.06), mid = vec3(0.04,0.07,0.16), hor = vec3(0.12,0.16,0.27);
           vec3 c = mix(hor, mid, smoothstep(0.0, 0.25, y)); c = mix(c, top, smoothstep(0.25, 0.9, y));
           // aurora-ish band
-          float band = exp(-pow((y-0.32)*7.0,2.0)) * (0.5+0.5*sin(vDir.x*6.0+uTime*0.07+vDir.z*3.0));
+          float bq = (y-0.32)*7.0; float band = exp(-bq*bq) * (0.5+0.5*sin(vDir.x*6.0+uTime*0.07+vDir.z*3.0));
           c += vec3(0.02,0.16,0.14)*band*0.55;
           // stars
           vec3 g = floor(vDir*320.0); float s = h(g); float tw = 0.6+0.4*sin(uTime*2.0+s*50.0);
@@ -196,6 +210,8 @@ export class World {
           c = mix(c, vec3(0.16,0.19,0.26), uStorm*0.85);
           // melt the horizon into the scene fog so the fogged far ground/forest has no hard edge
           c = mix(uFog, c, smoothstep(-0.03, 0.16 + uStorm * 0.2, vDir.y));
+          // debug only (__xmas.injectNaN): a tiny NaN patch to reproduce the bloom smear seen on Apple GPUs
+          if (uNaN > 0.5 && abs(vDir.y - 0.25) < 0.01 && abs(vDir.x) < 0.01) c = vec3(0.0 / (uNaN - 1.0));
           gl_FragColor = vec4(c,1.0);
           #include <colorspace_fragment>
         }`,
@@ -557,6 +573,94 @@ export class World {
     const m = this.roadMat.clone(); snowyCobble(m, 0, pw); m.polygonOffsetFactor = -1.5; m.polygonOffsetUnits = -3;
     const mesh = new THREE.Mesh(mergeGeometries(geos), m); mesh.receiveShadow = true; this.root.add(mesh); this.pathMesh = mesh;
   }
+  /** LOW preset: merge every building's static add-ons (decor, signs, lights frames...) per material, keeping
+   *  LOD meshes, animated parts and anything flagged noBatch separate. Returns [meshes before, after]. */
+  batchStatic() {
+    const anim = new Set(this.animated || []), skip = o => o.isLOD || o.userData.noBatch || anim.has(o);
+    let before = 0, after = 0; const cnt = g => { let n = 0; g.traverse(o => { if (o.isMesh) n++; }); return n; };
+    for (const b of this.buildings) { const h = b.holder; if (!h) continue; before += cnt(h); try { batchByMaterial(h, skip); } catch (e) { console.warn('[batch]', b.type, e.message); } after += cnt(h); }
+    return [before, after];
+  }
+  /** LOW preset: merge every building's static opaque meshes (LOD -> its lowest level) into world-space chunks of
+   *  `cell` metres per material, so the whole town costs ~(cells x materials) draw calls instead of one+ per house.
+   *  Originals are hidden, not removed (raycasts / attach audits still see them). Returns {hidden, chunks}. */
+  chunkStatic(cell = 48, bakeInstances = false) {
+    const anim = new Set(this.animated || []), sets = new Map(), hidden = []; let n = 0;
+    const live = new Set(this.buildings.map(b => b.winMat).filter(Boolean)); // per-house window material (turns blue on delivery)
+    // identical-looking materials cloned per house share one chunk draw: key on what the shader actually sees
+    const hx = c => (c ? c.getHexString() : '-'), id = t => (t ? t.uuid : '-');
+    const sig = m => [m.type, hx(m.color), hx(m.emissive), m.emissiveIntensity, m.roughness, m.metalness, m.opacity, m.side, m.vertexColors, m.flatShading,
+      id(m.map), id(m.normalMap), id(m.roughnessMap), id(m.metalnessMap), id(m.emissiveMap), id(m.aoMap), id(m.alphaMap), m.alphaTest,
+      m.customProgramCacheKey ? m.customProgramCacheKey() : '', m.onBeforeCompile ? m.onBeforeCompile.toString().length : 0].join('/');
+    const visChain = (o, top) => { for (let p = o; p && p !== top.parent; p = p.parent) if (!p.visible) return false; return true; };
+    const ok = (o, top) => {
+      if (!o.isMesh || o.isInstancedMesh || o.isSkinnedMesh || Array.isArray(o.material) || o.userData.noBatch) return false;
+      const m = o.material; if (!m || live.has(m) || m.transparent || m.alphaTest > 0 && !m.map || o.morphTargetInfluences?.length) return false;
+      if (o.onBeforeRender !== THREE.Object3D.prototype.onBeforeRender || !visChain(o, top)) return false;
+      for (let p = o; p && p !== top; p = p.parent) if (anim.has(p)) return false;
+      return o.matrixWorld.determinant() >= 0;
+    };
+    const take = (o, top) => {
+      if (!ok(o, top)) return false;
+      let g = o.geometry.index ? o.geometry.toNonIndexed() : o.geometry.clone();
+      for (const k of Object.keys(g.attributes)) if (!['position', 'normal', 'uv'].includes(k)) g.deleteAttribute(k); toF32(g);
+      if (!g.attributes.normal) g.computeVertexNormals();
+      if (!g.attributes.uv) g.setAttribute('uv', new THREE.BufferAttribute(new Float32Array(g.attributes.position.count * 2), 2));
+      g.morphAttributes = {}; g.clearGroups(); g.applyMatrix4(o.matrixWorld);
+      const m = o.material, e = new THREE.Vector3(); o.getWorldPosition(e);
+      const key = Math.floor(e.x / cell) + ',' + Math.floor(e.z / cell) + '|' + sig(m) ;
+      if (!sets.has(key)) sets.set(key, { mat: m, cs: o.castShadow, rs: o.receiveShadow, geos: [] });
+      sets.get(key).geos.push(g); n++; return true;
+    };
+    for (const b of this.buildings) {
+      const h = b.holder; if (!h || !h.visible) continue; h.updateMatrixWorld(true);
+      const lods = []; h.traverse(o => { if (o.isLOD) lods.push(o); });
+      for (const L of lods) { const lv = L.levels[L.levels.length - 1]?.object; if (!lv) continue; const got = []; lv.traverse(o => got.push(o));
+        if (!got.every(o => !o.isMesh || ok(o, h))) continue; for (const o of got) if (o.isMesh) take(o, h); L.visible = false; hidden.push(L); }
+      const kill = [];
+      h.traverse(o => { if (!o.isMesh) return; for (let p = o; p && p !== h; p = p.parent) if (p.isLOD) return; if (take(o, h)) kill.push(o); });
+      for (const o of kill) { o.visible = false; hidden.push(o); }
+    }
+    // whole-map static InstancedMeshes (decor kits per house type, snowmen, fences, lamps...): bake each instance
+    // into the same cell chunks, so ~85 kit draws collapse into the few lit/glow/snow materials per cell
+    const holders = new Set(this.buildings.map(b => b.holder)), skipI = /^(pinesNear|pinesFar|windowInteriors)$/;
+    const ims = []; this.root.traverse(o => { if (o.isInstancedMesh) ims.push(o); });
+    const mi = new THREE.Matrix4(), mw = new THREE.Matrix4(), e = new THREE.Vector3();
+    for (const o of bakeInstances ? ims : []) {
+      if (skipI.test(o.name) || o.instanceColor || o.count > 400 || o.userData.noBatch || o.userData.noCull || Array.isArray(o.material)) continue;
+      const m = o.material; if (!m || m.transparent || m.alphaTest > 0 && !m.map || m.vertexColors || !visChain(o, this.root)) continue;
+      let inHolder = false; for (let p = o; p; p = p.parent) if (holders.has(p) || anim.has(p)) inHolder = true; if (inHolder) continue;
+      const g0 = o.geometry.index ? o.geometry.toNonIndexed() : o.geometry.clone();
+      for (const k of Object.keys(g0.attributes)) if (!['position', 'normal', 'uv'].includes(k)) g0.deleteAttribute(k); toF32(g0);
+      if (!g0.attributes.normal) g0.computeVertexNormals();
+      if (!g0.attributes.uv) g0.setAttribute('uv', new THREE.BufferAttribute(new Float32Array(g0.attributes.position.count * 2), 2));
+      g0.morphAttributes = {}; g0.clearGroups(); o.updateMatrixWorld(true);
+      for (let i = 0; i < o.count; i++) {
+        o.getMatrixAt(i, mi); mw.multiplyMatrices(o.matrixWorld, mi); if (mw.determinant() < 0) continue;
+        e.setFromMatrixPosition(mw); const g = g0.clone().applyMatrix4(mw);
+        const key = Math.floor(e.x / cell) + ',' + Math.floor(e.z / cell) + '|' + sig(m) ;
+        if (!sets.has(key)) sets.set(key, { mat: m, cs: o.castShadow, rs: o.receiveShadow, geos: [] });
+        sets.get(key).geos.push(g); n++;
+      }
+      o.visible = false; o.userData.noCull = true; hidden.push(o);
+    }
+    const grp = new THREE.Group(); grp.name = 'lowChunks';
+    for (const { mat, cs, rs, geos } of sets.values()) { const g = mergeGeometries(geos); if (!g) continue; g.computeBoundingSphere(); const m = new THREE.Mesh(g, mat); m.castShadow = cs; m.receiveShadow = rs; m.matrixAutoUpdate = false; grp.add(m); }
+    this.root.add(grp); this.lowChunks = grp;
+    return { meshes: n, hidden: hidden.length, chunks: grp.children.length };
+  }
+  /** distance to the straight approach lane in front of every door (door -> 10 m out along the facade normal);
+   *  keeps a gate-wide gap in fences / small pines even where no cobbled path was laid (too short / too long) */
+  distToDoorLane(x, z) {
+    let best = 1e9;
+    for (const b of this.buildings || []) {
+      if (!b.door || !b.front) continue;
+      const x0 = b.door.x, z0 = b.door.z, dx = b.front.x * 10, dz = b.front.z * 10, l2 = dx * dx + dz * dz || 1;
+      const t = Math.max(0, Math.min(1, ((x - x0) * dx + (z - z0) * dz) / l2)), d = Math.hypot(x - x0 - dx * t, z - z0 - dz * t);
+      if (d < best) best = d;
+    }
+    return best;
+  }
   distToPath(x, z) {
     let best = 1e9;
     for (const q of this.paths || []) {
@@ -722,12 +826,12 @@ export class World {
         const nx = -p.tz * side, nz = p.tx * side;
         // snowy picket fence just off the curb bank
         const fo = rw / 2 + 1.75, fx = p.x + nx * fo, fz = p.z + nz * fo;
-        if (run && d0 > W.squareRadius + 3 && this.distToPath(fx, fz) > 1.5 && !this.buildingAt(fx, fz, 0.5) && !nearLamp(fx, fz, 1.1) && !this.inLake(fx, fz, 1) && this.distToRoad(fx, fz) > rw / 2 + 1.4)
+        if (run && d0 > W.squareRadius + 3 && this.distToPath(fx, fz) > 2.5 && this.distToDoorLane(fx, fz) > 2.5 && !this.buildingAt(fx, fz, 0.5) && !nearLamp(fx, fz, 1.1) && !this.inLake(fx, fz, 1) && this.distToRoad(fx, fz) > rw / 2 + 1.4)
           fences.push([fx, fz, Math.atan2(p.tx, p.tz)]);
         // small snowy pines in the gaps between houses
         if (R() < 0.8) {
           const po = rw / 2 + R.range(2.5, 5.2), px = p.x + nx * po + p.tx * R.range(-1, 1), pz = p.z + nz * po + p.tz * R.range(-1, 1);
-          if (d0 > W.squareRadius + 3 && this.distToPath(px, pz) > 1.6 && !this.buildingAt(px, pz, 1.0) && !nearLamp(px, pz, 1.8) && !this.inLake(px, pz, 1) && this.distToRoad(px, pz) > rw / 2 + 2.3
+          if (d0 > W.squareRadius + 3 && this.distToPath(px, pz) > 1.6 && this.distToDoorLane(px, pz) > 1.8 && !this.buildingAt(px, pz, 1.0) && !nearLamp(px, pz, 1.8) && !this.inLake(px, pz, 1) && this.distToRoad(px, pz) > rw / 2 + 2.3
             && !pines.some(q => (q[0] - px) ** 2 + (q[1] - pz) ** 2 < 3.2)) pines.push([px, pz, R.range(0.3, 0.62), R() * 6.28]);
         }
       }
@@ -822,7 +926,7 @@ export class World {
           void main(){
             vec2 q = gl_PointCoord * 2.0 - 1.0; float r = length(q); if (r > 1.0) discard;
             float core = 1.0 - smoothstep(0.10 / vCore * 0.5, 0.22 / vCore * 0.5 + 0.02, r);
-            float halo = pow(1.0 - r, 2.2) * 0.55;
+            float halo = pow(max(1.0 - r, 0.0), 2.2) * 0.55;
             vec3 c = vCol * (halo + core * 1.6) + vec3(1.0, 0.95, 0.85) * core * 0.9;
             gl_FragColor = vec4(c * vI, 1.0);
           }`,
@@ -1004,12 +1108,25 @@ export class World {
     const sign = new THREE.Group(); sign.position.set(0, 3.15, wallZ + 0.055);
     const A = ((this.attachAudit ||= {})[type] ||= { obj, holder, bulbs: [], dropped: 0 });
     if (!A.signs) { const pts = [[-1.1, 2.55], [1.1, 2.55], [-1.1, 3.75], [1.1, 3.75], [0, 3.15]].map(([u, v]) => new THREE.Vector3(u, v, wallZ)); A.signs = [{ kind: 'validator-sign', p: pts[4], pts, dirs: [new THREE.Vector3(0, 0, 1)] }]; }
-    const plateGeo = new THREE.BoxGeometry(2.5, 1.45, 0.08);
-    const plate = new THREE.Mesh(plateGeo, new THREE.MeshStandardMaterial({ color: 0x0b1424, roughness: 0.35, metalness: 0.4 }));
-    const frame = new THREE.Mesh(new THREE.BoxGeometry(2.62, 1.57, 0.05), new THREE.MeshStandardMaterial({ color: 0x1d2633, roughness: 0.5, metalness: 0.6 })); frame.position.z = -0.03;
-    const cap = new THREE.Mesh(new THREE.BoxGeometry(2.66, 0.1, 0.24), this.M.snow); cap.position.set(0, 0.8, 0.03); cap.scale.y = 1.4;
-    const logo = makeLogoMesh(0.95, 0.02, 0x51b1fe, 0.95); logo.position.z = 0.05; logo.userData.halo.material.opacity = 0.75;
-    sign.add(frame, plate, cap, logo); sign.userData.logo = logo; holder.add(sign);
+    // framed shop-style board: carved wooden frame, dark painted inset with the official mark, iron wall brackets
+    // with chains, corner bolts and a snow cap, standing ~12 cm off the wall like the other signs
+    const wood = new THREE.MeshStandardMaterial({ color: 0x5b3a22, roughness: 0.78, metalness: 0.0 });
+    const iron = new THREE.MeshStandardMaterial({ color: 0x24282e, roughness: 0.45, metalness: 0.8 });
+    const plate = new THREE.Mesh(new THREE.BoxGeometry(2.3, 1.25, 0.06), new THREE.MeshStandardMaterial({ color: 0x0c1830, roughness: 0.55, metalness: 0.1 }));
+    const frame = new THREE.Group();
+    for (const [w, h, x, y] of [[2.62, 0.16, 0, 0.705], [2.62, 0.16, 0, -0.705], [0.16, 1.57, -1.23, 0], [0.16, 1.57, 1.23, 0]]) {
+      const m = new THREE.Mesh(new THREE.BoxGeometry(w, h, 0.12), wood); m.position.set(x, y, 0.02); frame.add(m);
+    }
+    for (const sx of [-1, 1]) for (const sy of [-1, 1]) { const bolt = new THREE.Mesh(new THREE.CylinderGeometry(0.035, 0.035, 0.03, 8), iron); bolt.rotation.x = Math.PI / 2; bolt.position.set(sx * 1.23, sy * 0.705, 0.09); frame.add(bolt); }
+    for (const sx of [-0.85, 0.85]) { // wall bracket arm + short chain down to the frame top
+      const arm = new THREE.Mesh(new THREE.BoxGeometry(0.06, 0.06, 0.26), iron); arm.position.set(sx, 0.98, -0.06); frame.add(arm);
+      const plateW = new THREE.Mesh(new THREE.BoxGeometry(0.16, 0.22, 0.03), iron); plateW.position.set(sx, 0.98, -0.18); frame.add(plateW);
+      const chain = new THREE.Mesh(new THREE.CylinderGeometry(0.014, 0.014, 0.2, 6), iron); chain.position.set(sx, 0.86, 0.05); frame.add(chain);
+    }
+    sign.position.z += 0.07;
+    const cap = new THREE.Mesh(new THREE.BoxGeometry(2.66, 0.1, 0.2), this.M.snow); cap.position.set(0, 0.8, 0.03); cap.scale.y = 1.3;
+    const logo = makeLogoMesh(0.9, 0.02, 0x51b1fe, 0.95); logo.position.z = 0.045; logo.userData.halo.material.opacity = 0.6;
+    sign.add(frame, plate, cap, logo); sign.userData.logo = logo; holder.add(sign); batchByMaterial(frame);
     this.validatorSign = sign;
   }
   queueDeco(kind, x, z, rot, s = 1, lift = -0.03, b = null) { this.deco.push({ kind, x, z, rot, s, lift, b }); }
@@ -1238,7 +1355,7 @@ export class World {
       });
       for (const o of statics) {
         let g = o.geometry.index ? o.geometry.toNonIndexed() : o.geometry.clone();
-        for (const k of Object.keys(g.attributes)) if (!['position', 'normal', 'uv'].includes(k)) g.deleteAttribute(k);
+        for (const k of Object.keys(g.attributes)) if (!['position', 'normal', 'uv'].includes(k)) g.deleteAttribute(k); toF32(g);
         if (!g.attributes.uv) g.setAttribute('uv', new THREE.BufferAttribute(new Float32Array(g.attributes.position.count * 2), 2));
         g.clearGroups();
         g.applyMatrix4(o.matrixWorld);
@@ -1325,9 +1442,9 @@ export class World {
   blocksCamera(x, y, z) {
     for (const c of this.query(x, z)) {
       if (c.kind === 'c') { if (c.r >= 0.6 && y < 9 && Math.hypot(x - c.x, z - c.z) < c.r + 0.5) return true; continue; }
-      if (c.kind !== 'b' || y > c.h) continue;
+      if (c.kind !== 'b' || y > c.h + 1.2) continue; // + roof overhang / chimney
       const dx = x - c.x, dz = z - c.z; const lx = dx * c.c - dz * c.s, lz = dx * c.s + dz * c.c;
-      if (Math.abs(lx) < c.hw + 0.3 && Math.abs(lz) < c.hd + 0.3) return true;
+      if (Math.abs(lx) < c.hw + 0.6 && Math.abs(lz) < c.hd + 0.6) return true; // 0.6: eaves overhang the x0.94 footprint
     }
     return false;
   }

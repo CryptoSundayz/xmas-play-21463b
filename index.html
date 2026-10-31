@@ -108,6 +108,23 @@
 
 <div id="loading" class="screen"><div class="spinner"></div><div>Building the village…</div></div>
 
+<script>
+// error toast: any uncaught error / rejection / GPU reset shows a small readable note instead of failing silently
+(function () {
+  var box = null, seen = {};
+  window.__toast = function (msg, kind) {
+    try {
+      msg = String(msg || 'Unknown error').slice(0, 220); if (seen[msg]) return; seen[msg] = 1;
+      if (!box) { box = document.createElement('div'); box.id = 'errToast'; document.body.appendChild(box); }
+      var d = document.createElement('div'); d.className = 'errItem' + (kind ? ' ' + kind : ''); d.textContent = (kind === 'info' ? '' : '\u26A0 ') + msg;
+      d.onclick = function () { d.remove(); }; box.appendChild(d); setTimeout(function () { d.remove(); }, 12000);
+      while (box.children.length > 3) box.firstChild.remove();
+    } catch (e) {}
+  };
+  window.addEventListener('error', function (e) { window.__toast((e.message || 'Script error') + (e.filename ? ' @ ' + e.filename.split('/').pop() + ':' + e.lineno : '')); });
+  window.addEventListener('unhandledrejection', function (e) { var r = e.reason; window.__toast('Promise: ' + (r && (r.message || r)) ); });
+})();
+</script>
 <script type="module" src="src/main.js"></script>
 </body>
 </html>

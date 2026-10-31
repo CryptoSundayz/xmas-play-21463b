@@ -23,6 +23,38 @@ export async function loadEnvironment(renderer, scene, url, intensity) {
   } catch (e) { console.warn('HDRI not loaded, continuing without IBL', e); return false; }
 }
 
+// ------------------------------------------------------------- NaN / Inf killer
+// Runs right after the scene render, before bloom. A single NaN/Inf pixel in the HDR buffer is
+// smeared by UnrealBloom's separable blur across its low mips into big solid rectangles (seen as
+// black screen-space patches on Apple GPUs). Comparisons are written so fast-math can't fold them.
+const SanitizeShader = {
+  uniforms: { tDiffuse: { value: null }, uMax: { value: 48.0 }, uDebug: { value: 0 }, uTexel: { value: new THREE.Vector2(1 / 1024, 1 / 1024) } },
+  vertexShader: 'varying vec2 vUv; void main(){ vUv = uv; gl_Position = projectionMatrix*modelViewMatrix*vec4(position,1.0); }',
+  fragmentShader: `uniform sampler2D tDiffuse; uniform float uMax, uDebug; uniform vec2 uTexel; varying vec2 vUv;
+    // integer tests survive fast-math (Metal) where isnan()/isinf() may be folded away
+    bool isBad(float x){ return (floatBitsToUint(x) & 0x7f800000u) == 0x7f800000u; }
+    bool isNaNb(float x){ return isBad(x) && (floatBitsToUint(x) & 0x007fffffu) != 0u; }
+    bool bad4(vec4 c){ return isBad(c.r) || isBad(c.g) || isBad(c.b) || isBad(c.a); }
+    bool nan4(vec4 c){ return isNaNb(c.r) || isNaNb(c.g) || isNaNb(c.b) || isNaNb(c.a); }
+    vec4 fix(vec4 c){ // +Inf (additive overflow) -> bright, -Inf/NaN -> 0
+      return vec4(isBad(c.r) ? (isNaNb(c.r) || c.r < 0.0 ? 0.0 : uMax) : c.r, isBad(c.g) ? (isNaNb(c.g) || c.g < 0.0 ? 0.0 : uMax) : c.g,
+                  isBad(c.b) ? (isNaNb(c.b) || c.b < 0.0 ? 0.0 : uMax) : c.b, isBad(c.a) ? 1.0 : c.a); }
+    void main(){
+      vec4 c = texture2D(tDiffuse, vUv);
+      bool b = bad4(c);
+      if (uDebug > 0.5) { gl_FragColor = b ? (nan4(c) ? vec4(1.0, 0.0, 1.0, 1.0) : vec4(0.0, 1.0, 0.0, 1.0)) : vec4(c.rgb * 0.15, 1.0); return; }
+      if (b && nan4(c)) { // NaN pixel: rebuild from the valid neighbours (a NaN fragment never shows as a black hole)
+        vec4 acc = vec4(0.0); float n = 0.0;
+        for (int i = 0; i < 8; i++) {
+          float a = float(i) * 0.785398; vec4 q = texture2D(tDiffuse, vUv + vec2(cos(a), sin(a)) * uTexel * 2.0);
+          if (!bad4(q)) { acc += q; n += 1.0; }
+        }
+        c = n > 0.0 ? acc / n : vec4(0.0, 0.0, 0.0, 1.0);
+      } else if (b) c = fix(c);
+      gl_FragColor = clamp(c, vec4(0.0), vec4(uMax));
+    }`,
+};
+
 // ------------------------------------------------------------- final pass
 const FinalShader = {
   uniforms: {
@@ -72,7 +104,7 @@ const FinalShader = {
       // film grain
       float n = hash(uv * uRes + fract(uTime * 7.13) * 91.7) - 0.5;
       c += n * uGrain * (1.0 - l * 0.7);
-      gl_FragColor = vec4(c, 1.0);
+      gl_FragColor = vec4(clamp(c, 0.0, 1.0), 1.0);
     }`,
 };
 
@@ -89,6 +121,7 @@ export class PostFX {
     const rt = new THREE.WebGLRenderTarget(size.x, size.y, { type: half ? THREE.HalfFloatType : THREE.UnsignedByteType, samples: Math.min(Q.msaa || 0, maxS) });
     const composer = this.composer = new EffectComposer(renderer, rt);
     composer.addPass(new RenderPass(scene, camera));
+    this.sanitize = new ShaderPass(SanitizeShader); composer.addPass(this.sanitize);
     if (Q.ao) {
       const ao = this.ao = new GTAOPass(scene, camera, size.x, size.y);
       ao.output = GTAOPass.OUTPUT.Default; ao.blendIntensity = 0.9;
@@ -101,6 +134,7 @@ export class PostFX {
         this.scene.traverse(o => { if (o.visible && (o.isSprite || o.userData.noAO || (o.material && !Array.isArray(o.material) && o.material.transparent && o.material.depthWrite === false))) o.visible = false; });
       };
       composer.addPass(ao);
+      this.sanitize2 = new ShaderPass(SanitizeShader); composer.addPass(this.sanitize2);
       if (Q.ao === 'cinematic') ao.enabled = false;
     }
     if (Q.bloom) {
@@ -108,6 +142,8 @@ export class PostFX {
       this.bloom = new UnrealBloomPass(new THREE.Vector2(size.x * bs, size.y * bs), bloomCfg.strength, bloomCfg.radius, bloomCfg.threshold);
       this.bloomBase = { ...bloomCfg };
       composer.addPass(this.bloom);
+      // bloom's mip chain can turn an overflowing (+Inf) highlight into Inf - Inf = NaN: kill again before tone mapping
+      this.sanitize3 = new ShaderPass(SanitizeShader); composer.addPass(this.sanitize3);
     }
     composer.addPass(new OutputPass());
     if (Q.grade) {
@@ -126,6 +162,7 @@ export class PostFX {
     this.composer.setSize(w, h);
     if (this.bloom && this.Q.bloomScale && this.Q.bloomScale < 1) this.bloom.setSize(w * this.renderer.getPixelRatio() * this.Q.bloomScale, h * this.renderer.getPixelRatio() * this.Q.bloomScale);
     this.final?.uniforms.uRes.value.set(w * this.renderer.getPixelRatio(), h * this.renderer.getPixelRatio());
+    for (const p of [this.sanitize, this.sanitize2, this.sanitize3]) p?.uniforms.uTexel.value.set(1 / Math.max(1, w * this.renderer.getPixelRatio()), 1 / Math.max(1, h * this.renderer.getPixelRatio()));
   }
   update(t, { focus = 12, boost = 0, flash = 0, storm = 0 } = {}) {
     if (!this.final) return;
@@ -140,7 +177,9 @@ export class PostFX {
   }
   setDof(on) { this._dofOff = !on; if (this.final) this.final.uniforms.uDof.value = on && this.ao?.enabled ? 1 : 0; }
   setAO(on) { if (this.ao) { this.ao.enabled = on; this._aoOff = !on; if (!on) this.setDof(false); } }
-  setBloom(on) { if (this.bloom) this.bloom.enabled = on; }
+  /** debug: magenta where the scene buffer holds NaN/Inf (bloom + grade bypassed so it stays pixel-exact) */
+  nanView(on) { if (!this.sanitize) return; this.sanitize.uniforms.uDebug.value = on ? 1 : 0; if (this.bloom) this.bloom.enabled = !on && !this._bloomOff; if (this.final) this.final.enabled = !on; }
+  setBloom(on) { this._bloomOff = !on; if (this.bloom) this.bloom.enabled = on; }
   /** weather-driven post (CONFIG.weather.post): crisp clear nights, softer glow + more depth haze in a storm */
   setWeather(storm) {
     const P = this.weatherPost; if (!P) return;
@@ -383,7 +422,7 @@ export class Shockwaves {
     ring.position.set(pos.x, 0.12, pos.z); ring.userData.noAO = true; this.scene.add(ring);
     const w = { ring, t: 0, dur, radius };
     if (pillar) {
-      const p = mk(this.pillarGeo, 'uniform vec3 uC; uniform float uA; varying vec2 vUv; void main(){ float f = pow(1.0 - vUv.y, 2.0); gl_FragColor = vec4(uC * 0.75 * f * uA, 1.0); }');
+      const p = mk(this.pillarGeo, 'uniform vec3 uC; uniform float uA; varying vec2 vUv; void main(){ float f = pow(clamp(1.0 - vUv.y, 0.0, 1.0), 2.0); gl_FragColor = vec4(uC * 0.75 * f * uA, 1.0); }');
       p.position.set(pos.x, 0, pos.z); p.userData.noAO = true; this.scene.add(p); w.pillar = p;
     }
     this.list.push(w);

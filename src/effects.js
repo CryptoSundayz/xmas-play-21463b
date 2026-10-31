@@ -104,6 +104,9 @@ export class Particles {
   }
 }
 
+// free GPU buffers of a finished one-shot object (geometries + materials; shared textures are cached, kept)
+function disposeTree(o) { o.traverse(m => { m.geometry?.dispose?.(); [].concat(m.material || []).forEach(x => x.dispose?.()); }); }
+const _flC = new THREE.Color(0.3, 0.6, 1.4);
 // ---------------------------------------------------- gossip gift flight
 export class Flights {
   constructor(scene, particles) { this.scene = scene; this.p = particles; this.list = []; }
@@ -132,7 +135,7 @@ export class Flights {
           float head = smoothstep(uP - 0.1, uP, x);
           float tail = smoothstep(0.0, 0.06, x) * (0.45 + 0.55 * x / max(uP, 0.001));
           float pulse = 0.65 + 0.35 * sin((x * 60.0 - uT * 22.0));
-          float edge = ${core ? 'pow(vE, 0.6)' : 'pow(vE, 2.5)'};
+          float edge = ${core ? 'pow(clamp(vE, 0.0, 1.0), 0.6)' : 'pow(clamp(vE, 0.0, 1.0), 2.5)'};
           float a = edge * tail * pulse * uFade;
           gl_FragColor = vec4(uC * (${core ? '1.35' : '0.75'} + head * 2.6) * a, a); }`,
     });
@@ -156,8 +159,8 @@ export class Flights {
         f.t += dt / f.dur; const t = Math.min(1, f.t);
         f.obj.position.lerpVectors(f.from, f.to, t); f.obj.position.y += Math.sin(t * Math.PI) * 3;
         f.obj.rotation.y += dt * 8; f.obj.scale.setScalar(1 - t * 0.4);
-        if (Math.random() < 0.6) this.p.spawn(f.obj.position.x, f.obj.position.y, f.obj.position.z, 0, 0.5, 0, new THREE.Color(0.3, 0.6, 1.4), 0.5);
-        if (f.t >= 1) { this.scene.remove(f.obj); this.list.splice(i, 1); f.onArrive?.(); }
+        if (Math.random() < 0.6) this.p.spawn(f.obj.position.x, f.obj.position.y, f.obj.position.z, 0, 0.5, 0, _flC, 0.5);
+        if (f.t >= 1) { this.scene.remove(f.obj); disposeTree(f.obj); this.list.splice(i, 1); f.onArrive?.(); }
       } else {
         if (f.fade < 0) {
           f.t += dt / f.dur; const t = Math.min(1, f.t);
@@ -166,7 +169,7 @@ export class Flights {
           f.curve.getPointAt(e, f.head.position);
           f.head.rotation.y += dt * 10;
           for (let k = 0; k < 2; k++) this.p.spawn(f.head.position.x, f.head.position.y, f.head.position.z, (Math.random() - 0.5) * 1.6, (Math.random() - 0.5) * 1.6, (Math.random() - 0.5) * 1.6, new THREE.Color(0.35, 0.8, 1.8), 0.5 + Math.random() * 0.5);
-          if (f.t >= 1) { f.fade = 1; this.scene.remove(f.head); if (f.onArrive) { this.p.burst(f.head.position, new THREE.Color(0.5, 0.9, 2.2), 36, 4.5, 0.7); this.onImpact?.(f.head.position); f.onArrive(); } }
+          if (f.t >= 1) { f.fade = 1; this.scene.remove(f.head); disposeTree(f.head); if (f.onArrive) { this.p.burst(f.head.position, new THREE.Color(0.5, 0.9, 2.2), 36, 4.5, 0.7); this.onImpact?.(f.head.position); f.onArrive(); } }
         } else {
           f.fade -= dt * 0.33; // trails linger ~3 s after the hit
           for (const m of [f.trail, f.trail.userData.core]) { m.material.uniforms.uFade.value = Math.max(0, f.fade); m.material.uniforms.uT.value += dt; }
@@ -175,7 +178,7 @@ export class Flights {
       }
     }
   }
-  clear() { for (const f of this.list) { this.scene.remove(f.obj || f.trail); if (f.head) this.scene.remove(f.head); } this.list = []; }
+  clear() { for (const f of this.list) { const o = f.obj || f.trail; this.scene.remove(o); disposeTree(o); if (f.head) { this.scene.remove(f.head); if (f.head.geometry?.attributes?.position) disposeTree(f.head); } } this.list = []; }
   get activeShards() { return this.list.filter(f => f.kind === 'shard').length; }
 }
 

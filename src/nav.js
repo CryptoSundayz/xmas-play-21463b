@@ -69,12 +69,16 @@ export class Nav {
       this._v.set(x.b.x, x.b.height + 3.2, x.b.z);
       const c = this._c.copy(this._v).applyMatrix4(camera.matrixWorldInverse);
       if (c.z < 0) { this._v.project(camera); if (Math.abs(this._v.x) < 0.94 && Math.abs(this._v.y) < 0.9) continue; } // on screen: gem/beacon marks it
-      // direction in screen space from the camera-space vector; anything behind the camera is pushed to the bottom edge
-      let px = c.x / Math.max(0.1, -c.z) * cy, py = -c.y / Math.max(0.1, -c.z) * cy;
-      if (c.z >= 0) { px = c.x; py = Math.abs(c.y) + c.z * 1.5; }
-      const k = Math.min((cx - m) / Math.max(1e-3, Math.abs(px)), (cy - m) / Math.max(1e-3, Math.abs(py)));
+      // direction by bearing: projected direction when in front, horizontal bearing (ahead = up, behind = down,
+      // left/right by side) when behind, then clamped to a box that keeps clear of the bottom touch controls
+      let px, py;
+      if (c.z < 0) { px = c.x / -c.z * cy; py = -c.y / -c.z * cy; }
+      else { const a = Math.atan2(c.x, -c.z); px = Math.sin(a) * W; py = -Math.cos(a) * H; }
+      const bottomRes = document.body.classList.contains('touch') ? Math.min(190, H * 0.36) : 96, topRes = m + 40;
+      const halfW = cx - m, up = cy - topRes, down = cy - bottomRes;
+      const k = Math.min(halfW / Math.max(1e-3, Math.abs(px)), (py < 0 ? up : down) / Math.max(1e-3, Math.abs(py)));
       px *= k; py *= k;
-      if (placed.some(q => Math.hypot(q[0] - px, q[1] - py) < 50)) continue; // nearer one already covers that spot
+      if (placed.some(q => Math.hypot(q[0] - px, q[1] - py) < 90)) continue; // nearer one already covers that spot
       placed.push([px, py]);
       let el = this.pool[used];
       if (!el) { el = document.createElement('div'); el.className = 'navEdgeItem'; el.innerHTML = '<i></i><span></span>'; this.edge.appendChild(el); this.pool.push(el); }

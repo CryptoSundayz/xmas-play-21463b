@@ -21,18 +21,21 @@ export class Input {
   setupTouch(canvas) {
     const zone = document.getElementById('joyZone'), knob = document.getElementById('joyKnob'), base = document.getElementById('joyBase');
     const jump = document.getElementById('jumpBtn');
-    let jid = null, cx = 0, cy = 0; const R = 55;
+    let jid = null, cx = 0, cy = 0, R = 50;
     const setKnob = (dx, dy) => { knob.style.transform = `translate(${dx}px, ${dy}px)`; };
     zone?.addEventListener('pointerdown', e => {
       jid = e.pointerId; zone.setPointerCapture(e.pointerId);
-      const r = base.getBoundingClientRect(); cx = r.left + r.width / 2; cy = r.top + r.height / 2;
+      const r = base.getBoundingClientRect(); cx = r.left + r.width / 2; cy = r.top + r.height / 2; R = Math.max(36, r.width * 0.43);
       this.joy.active = true; move(e); e.preventDefault();
     });
     const move = e => {
       if (e.pointerId !== jid) return;
       let dx = e.clientX - cx, dy = e.clientY - cy; const d = Math.hypot(dx, dy);
       if (d > R) { dx *= R / d; dy *= R / d; }
-      setKnob(dx, dy); this.joy.x = dx / R; this.joy.y = -dy / R;
+      setKnob(dx, dy);
+      // radial dead zone (12%) rescaled to 0..1 so small thumb jitter doesn't twitch Santa
+      const m = Math.hypot(dx, dy) / R, k = m < 0.12 ? 0 : (m - 0.12) / 0.88 / Math.max(1e-6, m);
+      this.joy.x = dx / R * k; this.joy.y = -dy / R * k;
     };
     zone?.addEventListener('pointermove', move);
     const end = e => { if (e.pointerId !== jid) return; jid = null; this.joy = { x: 0, y: 0, active: false }; setKnob(0, 0); };
@@ -51,7 +54,11 @@ export class Input {
     const k = this.keys;
     let x = (k.has('KeyD') || k.has('ArrowRight') ? 1 : 0) - (k.has('KeyA') || k.has('ArrowLeft') ? 1 : 0);
     let y = (k.has('KeyW') || k.has('ArrowUp') ? 1 : 0) - (k.has('KeyS') || k.has('ArrowDown') ? 1 : 0);
-    if (this.joy.active) { x = this.joy.x; y = this.joy.y; }
+    // touch: smooth the stick (pointer events arrive in uneven bursts on iOS -> jerky steering otherwise)
+    const now = performance.now(), dt = Math.min(0.1, Math.max(0, (now - (this._jt || now)) / 1000)); this._jt = now;
+    const a = 1 - Math.exp(-dt / 0.06), J = this._js || (this._js = { x: 0, y: 0 });
+    J.x += ((this.joy.active ? this.joy.x : 0) - J.x) * a; J.y += ((this.joy.active ? this.joy.y : 0) - J.y) * a;
+    if (this.joy.active || Math.hypot(J.x, J.y) > 0.02) { x = J.x; y = J.y; }
     const m = Math.hypot(x, y); if (m > 1) { x /= m; y /= m; }
     return { x, y };
   }

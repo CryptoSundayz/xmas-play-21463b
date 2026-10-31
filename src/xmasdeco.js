@@ -87,7 +87,7 @@ ${GLSL_NOISE}`)
 {
   vec3 wN = normalize((vec4(normal, 0.0) * viewMatrix).xyz);
   vec3 V = normalize(cameraPosition - vSnW);
-  float rim = pow(1.0 - max(0.0, dot(wN, V)), 3.0);
+  float rim = pow(clamp(1.0 - dot(wN, V), 0.0, 1.0), 3.0);
   // light scatters through thin crests -> faint cool glow on rims, deeper blue in hollows
   totalEmissiveRadiance += ${lift} * (vec3(0.05, 0.075, 0.13) * (0.5 + 0.5 * wN.y) + vec3(0.07, 0.1, 0.16) * rim);
   totalEmissiveRadiance += vec3(0.9, 0.95, 1.0) * snGlint(vSnW, wN) * 2.4 * ${k};

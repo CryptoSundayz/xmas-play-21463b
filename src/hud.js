@@ -34,11 +34,15 @@ export class HUD {
     g.fillStyle = '#0e3b2a'; for (const [tx, tz] of this.world.trees || []) { g.beginPath(); g.arc(...P(tx, tz), 1.6 * k, 0, 7); g.fill(); }
     // lake
     const L = this.world.lake; if (L) { g.fillStyle = '#5fa7d6'; g.beginPath(); g.ellipse(...P(L.cx, L.cz), L.rx * k, L.rz * k, 0, 0, 7); g.fill(); }
-    // roads
-    g.strokeStyle = '#b7a58c'; g.lineCap = 'round'; g.lineJoin = 'round'; g.lineWidth = CONFIG.world.roadWidth * k;
-    for (const r of this.world.roads) { g.beginPath(); r.pts.forEach((p, i) => i ? g.lineTo(...P(p.x, p.z)) : g.moveTo(...P(p.x, p.z))); g.stroke(); }
-    g.lineWidth = 1.6 * k; for (const q of this.world.paths || []) { g.beginPath(); g.moveTo(...P(q.x0, q.z0)); g.lineTo(...P(q.x1, q.z1)); g.stroke(); }
-    g.fillStyle = '#b7a58c'; g.beginPath(); g.arc(...P(0, 0), CONFIG.world.squareRadius * k, 0, 7); g.fill();
+    // roads: straight from world.roads (the same polylines the road ribbons are built from), drawn wider than
+    // life and snow-coloured so they read at 100 px; a dark casing keeps junctions legible. Door walkways
+    // (world.paths) are no longer drawn - at minimap scale they looked like extra streets that don't exist.
+    const road = (w, col) => { g.strokeStyle = col; g.lineWidth = w; g.lineCap = 'round'; g.lineJoin = 'round';
+      for (const r of this.world.roads) { g.beginPath(); r.pts.forEach((p, i) => i ? g.lineTo(...P(p.x, p.z)) : g.moveTo(...P(p.x, p.z))); if (r.closed) g.closePath(); g.stroke(); } };
+    const rw = CONFIG.world.roadWidth * 1.3 * k;
+    road(rw + 1.6 * k, '#4f6684'); road(rw, '#eef5fd');
+    g.fillStyle = '#4f6684'; g.beginPath(); g.arc(...P(0, 0), (CONFIG.world.squareRadius + 1) * k, 0, 7); g.fill();
+    g.fillStyle = '#eef5fd'; g.beginPath(); g.arc(...P(0, 0), CONFIG.world.squareRadius * k, 0, 7); g.fill();
     g.fillStyle = '#2f8a3e'; g.beginPath(); g.arc(...P(0, 0), 5 * k, 0, 7); g.fill();
     // houses
     for (const b of this.world.buildings) {
@@ -69,6 +73,10 @@ export class HUD {
     $('hudCompare').classList.toggle('mump', s.mump);
     // power-up
     $('hudPower').classList.toggle('on', s.mump);
+    // phones: the power-up card is a small top-centre toast that only peeks (3 s) when its message changes
+    const pkey = s.mump ? 'on' : (s.powerupsLeft || 0) + '';
+    if (pkey !== this._pkey) { this._pkey = pkey; this.peekT = 3; }
+    this.peekT = Math.max(0, (this.peekT || 0) - dt); $('hudPower').classList.toggle('peek', this.peekT > 0);
     $('powerState').textContent = s.mump ? `ACTIVE · ${s.mumpLeft.toFixed(1)}s · shards x${s.inRange}` : (s.powerupsLeft ? `${s.powerupsLeft} Optimum pickup${s.powerupsLeft > 1 ? 's' : ''} on the roads` : 'Next pickup respawning…');
     $('powerBar').style.width = s.mump ? (100 * s.mumpLeft / s.mumpDur).toFixed(1) + '%' : '0%';
     $('stormWarn').classList.toggle('show', s.storm > 0.3);

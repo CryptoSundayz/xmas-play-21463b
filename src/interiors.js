@@ -104,7 +104,7 @@ export function facadeShot(obj, holder, renderer, side = 0, ppm = 48, maskOnly =
       vertexShader: 'varying vec2 vUv; void main(){ vUv = uv; gl_Position = projectionMatrix * modelViewMatrix * vec4(position,1.0); }',
       fragmentShader: `uniform sampler2D map; uniform float uMask; varying vec2 vUv; void main(){ vec3 dc = texture2D(map, vUv).rgb;
         float wm = smoothstep(0.52, 0.85, dc.r) * smoothstep(0.28, 0.55, dc.g) * smoothstep(0.25, 0.5, dc.r - dc.b);
-        vec3 c = pow(dc, vec3(1.0/2.2)); gl_FragColor = vec4(uMask > 0.5 ? vec3(wm) : c, 1.0); }` });
+        vec3 c = pow(max(dc, vec3(0.0)), vec3(1.0/2.2)); gl_FragColor = vec4(uMask > 0.5 ? vec3(wm) : c, 1.0); }` });
     const m = new THREE.Mesh(o.geometry, mat); m.matrixAutoUpdate = false;
     m.matrix.multiplyMatrices(new THREE.Matrix4().makeRotationY(-side), new THREE.Matrix4().multiplyMatrices(inv, o.matrixWorld));
     g.add(m); m.updateMatrixWorld(true); box.expandByObject(m);
@@ -309,6 +309,7 @@ const FRAG = /* glsl */`
     vec3 p = vPos, d = normalize(vDir);
     if (vInfo.z > 0.5) { p.x = -p.x; d.x = -d.x; }
     d.z = min(d.z, -1e-3);
+    d.x = abs(d.x) < 1e-4 ? (d.x < 0.0 ? -1e-4 : 1e-4) : d.x; d.y = abs(d.y) < 1e-4 ? (d.y < 0.0 ? -1e-4 : 1e-4) : d.y;
     vec3 bmin = vec3(-RW * 0.5, yF, -D), bmax = vec3(RW * 0.5, yF + RH, 0.0);
     vec3 tA = (bmin - p) / d, tB = (bmax - p) / d, tF = max(tA, tB);
     float t = min(min(tF.x, tF.y), tF.z);

@@ -70,7 +70,7 @@ export const CONFIG = {
     name: 'Optimum Santa', // display name
     storyName: 'Santa Optimum', // used in the title-screen story ("<storyName> is carrying the newest block")
     jumpVelocity: 5.6, // m/s celebrate-hop reference (the player jump itself lives in player.jump)
-    grounding: { snowSink: 0.05, footSnap: 25, blobShadow: 0.42, stepPuffs: true, strideSync: true, strideAmpMax: 1.7, runCadenceMax: 3.2 },
+    grounding: { snowSink: 0.05, footSnap: 25, blobShadow: 0.42, stepPuffs: true, strideSync: true, strideAmpMax: 1.4, runCadenceMax: 3.6 },
     gravity: 16,
     celebrateHop: 3.4, // hop velocity on each delivery
     leanAmount: 0.05, // roll per (rad/s * m/s) of turning
@@ -164,7 +164,7 @@ export const CONFIG = {
 
   // ------------------------------------------------------------------ world
   // navigation aids
-  nav: { arrow: true, distance: true, arrowRadius: 2.2, arrowScale: 1.05, arrowHideNear: 4.5, beacons: true, beaconHeight: 70, edgeIndicators: true, edgeMax: 6, edgeMargin: 44,
+  nav: { arrow: false, distance: false, arrowRadius: 2.2, arrowScale: 1.05, arrowHideNear: 4.5, beacons: true, beaconHeight: 70, edgeIndicators: true, edgeMax: 3, edgeMargin: 44,
          mapPath: true, mapChecks: true, housesLeft: true, housesLeftText: '{n} houses left', houseLeftOne: '1 house left' },
   // shop-sign names (crisp code-drawn lettering over the baked AI sign boards); '' = plain board. Church/houses: no text.
   signs: { bakery: 'Bakery', toyWorkshop: 'Toy Workshop', inn: 'Inn', font: "700 {px}px Georgia, 'Times New Roman', 'Palatino Linotype', serif" },
@@ -196,8 +196,12 @@ export const CONFIG = {
   quality: 'auto',
   qualityPresets: {
     //        render scale       shadows (PCF soft)                    post / FX
-    low:    { pixelRatio: 1.0,  shadows: false, shadowMapSize: 512,  bloom: true, bloomScale: 0.5, msaa: 0, ao: false, dof: false, grade: true, env: true,
-              shafts: false, smoke: false, footprints: true, sparkle: false, snowLayers: 1, snowCount: 1200, forestScale: 0.55, lights: 4,  antialias: false },
+    // low = genuinely light: NO composer (direct render: no bloom / grade / NaN pass / probe), no shadows, no point
+    // lights, 1x (0.75x on 3x phones), merged house add-ons, instancing culled to cullRadius, LOD1 beyond lodDistance,
+    // draw distance `far` hidden by a fog floor. Target: < 150 draw calls, < 1.5M triangles at the busiest spot.
+    low:    { pixelRatio: 1.0,  shadows: false, shadowMapSize: 512,  bloom: false, bloomScale: 0.5, msaa: 0, ao: false, dof: false, grade: false, env: true,
+              shafts: false, smoke: false, footprints: true, sparkle: false, snowLayers: 1, snowCount: 600, forestScale: 0.4, lights: 0,  antialias: false,
+              far: 80, fogMin: 0.021, cullRadius: 40, lodDistance: 24, chunkCell: 80, propRadius: 34 },
     medium: { pixelRatio: 1.25, shadows: true,  shadowMapSize: 2048, bloom: true, bloomScale: 0.75, msaa: 2, ao: false, dof: false, grade: true, env: true,
               shafts: true,  smoke: true,  footprints: true, sparkle: true,  snowLayers: 2, snowCount: 2500, forestScale: 0.8,  lights: 8,  antialias: false },
     // high = smooth 60 fps on an Apple M-series laptop: 1.5x render scale cap, 2K tight shadows, GTAO + DOF only in cutscenes
@@ -224,6 +228,7 @@ export const CONFIG = {
     dynamicResolution: true,    // scale the render resolution with frame time (auto quality only)
     minScale: 0.6, maxScale: 1.0, // fraction of the preset pixel ratio
     maxPixels: { desktop: 4.2e6, mobile: 2.0e6 }, // hard cap on drawing-buffer pixels (also clamped to GPU limits)
+    ios: { maxPixelRatio: 1.0, maxPixels: 1.3e6, msaa: 0, shadowMapSize: 512, bloomScale: 0.4 }, // iPhone/iPad Safari: lighter still (tile GPU memory, thermal throttling, jetsam kills)
     mobile: { maxPixelRatio: 1.5, ao: false, dof: false, msaa: 2, shadowMapSize: 1024 }, // always applied on touch devices
     shadowFrustum: 28,          // half-size (m) of the moon shadow box around the player
     pineNearRange: 58,          // m: full needle-card pines inside, impostor cards beyond
@@ -247,13 +252,18 @@ export function resolveQuality(cfg = CONFIG) {
   let q = cfg.quality;
   if (q === 'auto') {
     const touch = matchMedia('(pointer: coarse)').matches;
-    q = touch ? (Math.min(screen.width, screen.height) < 360 ? 'low' : 'medium') : 'high';
+    q = touch ? 'low' : 'high'; // phones / tablets: the light preset (iOS Safari: memory + thermal headroom)
   }
   const Q = { name: q, auto: cfg.quality === 'auto', ...cfg.qualityPresets[q] };
   // touch devices (iPhone / iPad / Android): never GTAO / DOF, capped scale + MSAA + shadow size
   const touch = matchMedia('(pointer: coarse)').matches || 'ontouchstart' in window;
   Q.mobile = touch;
+  if (touch && q === 'low' && (devicePixelRatio || 1) >= 3) Q.pixelRatio = 0.75;
   if (touch) { const M = cfg.performance.mobile; Q.pixelRatio = Math.min(Q.pixelRatio, M.maxPixelRatio); Q.ao = M.ao && Q.ao; Q.dof = M.dof && Q.dof; Q.msaa = Math.min(Q.msaa, M.msaa); Q.shadowMapSize = Math.min(Q.shadowMapSize, M.shadowMapSize); }
+  // iOS Safari (incl. iPadOS that reports MacIntel): extra-light caps on top of the touch caps
+  const ios = /iP(hone|od|ad)/.test(navigator.userAgent) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1) || new URLSearchParams(location.search).get('ios') === '1';
+  Q.ios = ios;
+  if (ios) { const I = cfg.performance.ios; Q.pixelRatio = Math.min(Q.pixelRatio, I.maxPixelRatio); Q.msaa = Math.min(Q.msaa, I.msaa); Q.shadowMapSize = Math.min(Q.shadowMapSize, I.shadowMapSize); Q.bloomScale = Math.min(Q.bloomScale ?? 1, I.bloomScale); }
   // dev/QA: ?fx=ao:0,msaa:0,shadowMapSize:2048 overrides individual preset fields
   const fx = new URLSearchParams(location.search).get('fx');
   if (fx) for (const kv of fx.split(',')) { const [k, v] = kv.split(':'); if (k in Q) Q[k] = v === 'true' ? true : v === 'false' ? false : isNaN(+v) ? v : +v; }
