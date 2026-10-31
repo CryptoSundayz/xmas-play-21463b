@@ -1020,7 +1020,7 @@ function frame(dt) {
     interiors?.update(t);
     if (world.bulbMat) { const u = world.bulbMat.uniforms; u.uTime.value = t; u.uFog.value = scene.fog?.density ?? 0;
       u.uPx.value = renderer.getDrawingBufferSize(_dbs).y / (2 * Math.tan(THREE.MathUtils.degToRad(camera.fov) / 2)); }
-    pines?.update(camera.position, dt);
+    pines?.update(camera.position, dt, false, G.state === 'playing' ? { x0: camera.position.x, z0: camera.position.z, x1: player.pos.x, z1: player.pos.z } : null);
     flights.update(dt);
     particles.update(dt);
     fireworks.update(dt, G.state === 'ending');

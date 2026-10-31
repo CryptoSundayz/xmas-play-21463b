@@ -199,18 +199,35 @@ export class PineSystem {
       list.forEach((t, i) => { m4.compose(new THREE.Vector3(t.x, t.y ?? 0, t.z), q.setFromAxisAngle(up, t.r), new THREE.Vector3(t.s, t.s * (t.sy ?? 1), t.s)); m4.toArray(mats, i * 16); });
       near.count = 0; far.count = 0;
       scene.add(near, far);
-      this.vars.push({ list, mats, near, far, triNear: geo.index.count / 3 });
+      geo.computeBoundingBox(); const bb = geo.boundingBox;
+      this.vars.push({ list, mats, near, far, triNear: geo.index.count / 3, rad: Math.max(bb.max.x - bb.min.x, bb.max.z - bb.min.z) * 0.5 });
     }
     this.triPerTree = this.vars[0].triNear;
   }
-  update(camPos, dt = 0, force = false) {
+  /** occ = {x0, z0, x1, z1}: camera -> Santa segment. Trees whose crown overlaps it (or holds the camera) are
+   *  dropped from the draw so a pine never fills the screen / hides Santa; they come back once clear. */
+  occluded(occ) {
+    if (!occ) return '';
+    const { x0, z0, x1, z1 } = occ, dx = x1 - x0, dz = z1 - z0, l2 = dx * dx + dz * dz || 1; let key = '';
+    for (let v = 0; v < this.vars.length; v++) { const V = this.vars[v]; V.hide = V.hide || new Set(); V.hide.clear();
+      V.list.forEach((t, i) => {
+        const r = V.rad * t.s + 0.35, ex = t.x - x0, ez = t.z - z0; if (ex * ex + ez * ez > l2 + 4 * r * r + 40) return;
+        const k = Math.max(0, Math.min(1, (ex * dx + ez * dz) / l2)), qx = ex - dx * k, qz = ez - dz * k;
+        if (qx * qx + qz * qz < r * r && k < 0.92) { V.hide.add(i); key += v + ':' + i + ','; }
+      });
+    }
+    return key;
+  }
+  update(camPos, dt = 0, force = false, occ = null) {
     this.t += dt;
+    const ok = this.occluded(occ); if (ok !== this.occKey) { this.occKey = ok; force = true; }
     if (!force && this.t < 0.25 && this.last.distanceToSquared(new THREE.Vector2(camPos.x, camPos.z)) < 36) return;
     this.t = 0; this.last.set(camPos.x, camPos.z);
     const R2 = this.nearRange * this.nearRange;
     for (const V of this.vars) {
       const na = V.near.instanceMatrix.array, fa = V.far.instanceMatrix.array; let n = 0, f = 0;
       V.list.forEach((t, i) => {
+        if (V.hide && V.hide.has(i)) return;
         const d2 = (t.x - camPos.x) ** 2 + (t.z - camPos.z) ** 2;
         if (d2 < R2) { na.set(V.mats.subarray(i * 16, i * 16 + 16), n * 16); n++; }
         else { fa.set(V.mats.subarray(i * 16, i * 16 + 16), f * 16); f++; }
