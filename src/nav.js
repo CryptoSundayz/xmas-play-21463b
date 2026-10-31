@@ -19,7 +19,7 @@ export class Nav {
     outline.scale.setScalar(1.12); outline.position.y = -0.01;
     this.arrow = new THREE.Group(); this.arrow.add(outline, new THREE.Mesh(geo, this.arrowMat));
     this.arrow.scale.setScalar(CONFIG.nav?.arrowScale ?? 0.8); this.arrow.renderOrder = 5; this.arrow.visible = false; this.arrow.name = 'navArrow';
-    scene.add(this.arrow);
+    if (this.C.arrow !== false) scene.add(this.arrow); // arrow removed from the scene entirely when disabled
     this.dist = $('navDist'); this.left = $('housesLeft'); this.edge = $('navEdge');
     this.pool = []; this._v = new THREE.Vector3(); this._c = new THREE.Vector3(); this._dir = 0;
   }

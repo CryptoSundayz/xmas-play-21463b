@@ -389,7 +389,8 @@ export class World {
     const tree = glb ? glb.object : christmasTree(); this.root.add(tree); this.tree = tree;
     // fence ring around tree
     const fr = new THREE.Mesh(new THREE.TorusGeometry(6.2, 0.12, 6, 48), this.M.gold); fr.rotation.x = Math.PI / 2; fr.position.y = 0.7; this.root.add(fr);
-    for (let i = 0; i < 16; i++) { const a = i / 16 * Math.PI * 2; const p = new THREE.Mesh(new THREE.CylinderGeometry(0.08, 0.08, 0.75, 6), this.M.gold); p.position.set(Math.cos(a) * 6.2, 0.37, Math.sin(a) * 6.2); this.root.add(p); }
+    { const pg = []; for (let i = 0; i < 16; i++) { const a = i / 16 * Math.PI * 2; pg.push(new THREE.CylinderGeometry(0.08, 0.08, 0.75, 6).translate(Math.cos(a) * 6.2, 0.37, Math.sin(a) * 6.2)); }
+      this.root.add(new THREE.Mesh(mergeGeometries(pg), this.M.gold)); } // 16 square posts in one draw call
     this.addCircle(0, 0, 6.4);
     this.lightCandidates.push({ x: 0, y: 6, z: 0, color: new THREE.Color(0xffd28a), intensity: 140, distance: 40, always: true });
     // gift piles + benches + sleigh with reindeer

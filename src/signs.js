@@ -22,6 +22,12 @@ const STYLE = {
 };
 export const signLayout = type => (STYLE[type] || STYLE.bakery).layout;
 
+// sign board box with 2 draw groups (wood sides+back, painted front) instead of 6
+function boardBox(W, H, D) {
+  const g = new THREE.BoxGeometry(W, H, D), ix = Array.from(g.index.array);
+  g.setIndex([...ix.slice(0, 24), ...ix.slice(30, 36), ...ix.slice(24, 30)]); // move +z face to the end
+  g.clearGroups(); g.addGroup(0, 30, 0); g.addGroup(30, 6, 1); return g;
+}
 function rnd(seed) { let s = seed >>> 0 || 1; return () => ((s = Math.imul(s ^ (s >>> 15), 2246822507) ^ Math.imul(s ^ (s >>> 13), 3266489909)) >>> 0) / 4294967296; }
 
 // --- icons (drawn with paths, centred at 0,0 in a box of size s) ---
@@ -227,7 +233,7 @@ export function buildShopSign(type, text, rect, F, rayUp) {
     if (Math.abs(zf - z) > 0.3) return null;
     const zb = zf + 0.003, top = y + H / 2;
     const mat = boardMaterial(type, text, W, H, true);
-    const board = new THREE.Mesh(new THREE.BoxGeometry(W, H, D), [M.wood, M.wood, M.wood, M.wood, mat, M.wood]);
+    const board = new THREE.Mesh(boardBox(W, H, D), [M.wood, mat]);
     board.position.set(x, y, zb + D / 2); g.add(board);
     const fr = frameMoulding(W, H, D + 0.02); fr.position.set(x, y, zb); g.add(fr);
     const cap = snowCap(W + 0.08, D + 0.08); cap.position.set(x, top + 0.05, zb + D / 2); g.add(cap);
@@ -256,7 +262,7 @@ export function buildShopSign(type, text, rect, F, rayUp) {
     zs.sort((a, b) => a - b); const zb = zs[Math.floor(zs.length * 0.5)] + 0.004; // flush on the wall face (ignore the odd protrusion)
     if (Math.abs(zb - z) > 0.6) return null;
     const mat = boardMaterial(type, text, W, H, false);
-    const board = new THREE.Mesh(new THREE.BoxGeometry(W, H, D), [M.wood, M.wood, M.wood, M.wood, mat, M.wood]);
+    const board = new THREE.Mesh(boardBox(W, H, D), [M.wood, mat]);
     board.position.set(x, y, zb + D / 2); g.add(board);
     const fr = frameMoulding(W, H, D + 0.025); fr.position.set(x, y, zb); g.add(fr);
     const cap = snowCap(W + 0.08, 0.1); cap.position.set(x, y + H / 2 + 0.06, zb + 0.05); g.add(cap);

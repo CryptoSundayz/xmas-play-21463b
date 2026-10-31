@@ -201,7 +201,7 @@ export const CONFIG = {
     // draw distance `far` hidden by a fog floor. Target: < 150 draw calls, < 1.5M triangles at the busiest spot.
     low:    { pixelRatio: 1.0,  shadows: false, shadowMapSize: 512,  bloom: false, bloomScale: 0.5, msaa: 0, ao: false, dof: false, grade: false, env: true,
               shafts: false, smoke: false, footprints: true, sparkle: false, snowLayers: 1, snowCount: 600, forestScale: 0.4, lights: 0,  antialias: false,
-              far: 80, fogMin: 0.021, cullRadius: 40, lodDistance: 24, chunkCell: 80, propRadius: 34 },
+              far: 64, fogMin: 0.026, cullRadius: 40, lodDistance: 24, chunkCell: 80, propRadius: 34 },
     medium: { pixelRatio: 1.25, shadows: true,  shadowMapSize: 2048, bloom: true, bloomScale: 0.75, msaa: 2, ao: false, dof: false, grade: true, env: true,
               shafts: true,  smoke: true,  footprints: true, sparkle: true,  snowLayers: 2, snowCount: 2500, forestScale: 0.8,  lights: 8,  antialias: false },
     // high = smooth 60 fps on an Apple M-series laptop: 1.5x render scale cap, 2K tight shadows, GTAO + DOF only in cutscenes
