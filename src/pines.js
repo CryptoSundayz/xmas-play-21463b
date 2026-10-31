@@ -3,7 +3,7 @@
 // One near InstancedMesh + one impostor InstancedMesh per variant, refilled from the camera position a few
 // times a second -> ~4 draw calls for every pine in the world, and only nearby pines go into the shadow map.
 import * as THREE from 'three';
-import { rng } from './util.js?v=0063fe52';
+import { rng } from './util.js?v=9e6ba718';
 
 const H = 9; // reference tree height (m); instance scale multiplies it (same convention as the old Tripo pine)
 
@@ -150,8 +150,8 @@ function needleMaterial(atlas, msaa) {
 }
 
 // bake a variant into an impostor texture (front view; trees are near radially symmetric)
-function bakeImpostor(renderer, geo, mat) {
-  const W = 256, Hh = 512, rt = new THREE.WebGLRenderTarget(W, Hh, { samples: 4, generateMipmaps: true, minFilter: THREE.LinearMipmapLinearFilter });
+function bakeImpostor(renderer, geo, mat, rt0 = null) {
+  const W = 256, Hh = 512, rt = rt0 || new THREE.WebGLRenderTarget(W, Hh, { samples: 4, generateMipmaps: true, minFilter: THREE.LinearMipmapLinearFilter });
   const sc = new THREE.Scene(); sc.add(new THREE.AmbientLight(0xffffff, Math.PI * 0.95));
   const dl = new THREE.DirectionalLight(0xffffff, 0.6); dl.position.set(0.3, 1, 0.6); sc.add(dl);
   const mesh = new THREE.Mesh(geo, mat); sc.add(mesh);
@@ -200,10 +200,12 @@ export class PineSystem {
       near.count = 0; far.count = 0;
       scene.add(near, far);
       geo.computeBoundingBox(); const bb = geo.boundingBox;
-      this.vars.push({ list, mats, near, far, triNear: geo.index.count / 3, rad: Math.max(bb.max.x - bb.min.x, bb.max.z - bb.min.z) * 0.5 });
+      this.vars.push({ geo, I, list, mats, near, far, triNear: geo.index.count / 3, rad: Math.max(bb.max.x - bb.min.x, bb.max.z - bb.min.z) * 0.5 });
     }
     this.triPerTree = this.vars[0].triNear;
   }
+  /** re-render the impostor textures into their existing targets (after a WebGL context restore the GPU copy is gone) */
+  rebake(renderer) { for (const V of this.vars) bakeImpostor(renderer, V.geo, this.mat, V.I.rt); }
   /** occ = {x0, z0, x1, z1}: camera -> Santa segment. Trees whose crown overlaps it (or holds the camera) are
    *  dropped from the draw so a pine never fills the screen / hides Santa; they come back once clear. */
   occluded(occ) {

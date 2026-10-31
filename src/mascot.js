@@ -7,10 +7,10 @@
 //  - fur shells on the cream trim, velvet sheen on the red cloth
 import * as THREE from 'three';
 import { DecalGeometry } from 'three/addons/geometries/DecalGeometry.js';
-import { CONFIG } from './config.js?v=0063fe52';
-import { findClip } from './assets.js?v=0063fe52';
-import { MascotFace } from './mascotface.js?v=0063fe52';
-import { iconBlackShapes } from './logo.js?v=0063fe52';
+import { CONFIG } from './config.js?v=9e6ba718';
+import { findClip } from './assets.js?v=9e6ba718';
+import { MascotFace } from './mascotface.js?v=9e6ba718';
+import { iconBlackShapes } from './logo.js?v=9e6ba718';
 import { mergeVertices } from 'three/addons/utils/BufferGeometryUtils.js';
 
 /** Goggle mesh in root-local space: the official dark icon (outer contour + hollow centre) extruded with a rounded
@@ -658,7 +658,7 @@ export function glbMascot(root, glb, entry, gift, makeCarryIK, quality = 'high')
         else if (!feet.up[k] && h > 0.07) feet.up[k] = true;
       }
     }
-    if (ik) ik();
+    if (ik && gift.visible) ik(); // no carry pose while the gift is hidden (wardrobe preview)
     // -- pom-pom spring (verlet-ish point following the rigid tip)
     if (pom && pomTip) {
       pom.quaternion.identity(); pom.updateMatrixWorld(true);

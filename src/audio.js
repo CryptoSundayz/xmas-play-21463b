@@ -27,6 +27,8 @@ function silentWav() {
   v.setUint32(24, 22050, true); v.setUint32(28, 44100, true); v.setUint16(32, 2, true); v.setUint16(34, 16, true); w(36, 'data'); v.setUint32(40, n * 2, true);
   return URL.createObjectURL(new Blob([b], { type: 'audio/wav' }));
 }
+/** resume a suspended / interrupted context (safe to call any time; no-op before initAudio) */
+export function resumeAudio() { if (ctx && ctx.state !== 'running' && ctx.state !== 'closed') ctx.resume().catch?.(() => {}); }
 export function unlockAudioGesture() { // call synchronously inside a click/touchend handler
   try { if (navigator.audioSession) navigator.audioSession.type = 'playback'; } catch (e) { /* ignore */ }
   try {
@@ -86,7 +88,8 @@ export function initAudio(on = true) {
     // iOS only counts touchend / click / pointerup as activation (not pointerdown / touchstart)
     const unlock = () => { if (ctx.state !== 'running' || (silentEl && silentEl.paused)) unlockAudioGesture(); };
     for (const ev of ['touchend', 'pointerup', 'click', 'keydown']) addEventListener(ev, unlock, true);
-    document.addEventListener('visibilitychange', () => { if (!document.hidden && ctx.state !== 'running') ctx.resume().catch?.(() => {}); });
+    document.addEventListener('visibilitychange', () => { if (!document.hidden) resumeAudio(); });
+    addEventListener('pageshow', () => resumeAudio()); // back from the bfcache (iOS after leaving for X)
     ctx.onstatechange = () => { if (ctx.state === 'interrupted') setTimeout(() => ctx.resume().catch?.(() => {}), 300); };
     if (pendingTrack) { const p = pendingTrack; pendingTrack = null; music.play(p); }
   } catch (e) { ctx = null; }

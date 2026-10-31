@@ -1,27 +1,27 @@
 // Santa's Block Delivery — game bootstrap, loop and state machine.
 import * as THREE from 'three';
-import { PostFX, loadEnvironment, LampCones, Footprints, SnowPuffs, ChimneySmoke, Sparkles, Shockwaves, Governor } from './fx.js?v=0063fe52';
-import { CONFIG, applyUrlOverrides, resolveQuality, difficulty, ethPerBlock, formatEth, comboMult, fmt } from './config.js?v=0063fe52';
-import { initAssets } from './assets.js?v=0063fe52';
-import { World } from './world.js?v=0063fe52';
-import { Interiors } from './interiors.js?v=0063fe52';
-import { PineSystem } from './pines.js?v=0063fe52';
-import { createSanta } from './santa.js?v=0063fe52';
-import { Input } from './input.js?v=0063fe52';
-import { HUD } from './hud.js?v=0063fe52';
-import { Snow, Particles, Flights, Fireworks } from './effects.js?v=0063fe52';
-import { makeLogoMesh, logoSVG } from './logo.js?v=0063fe52';
-import { WINDOW_WARM, WINDOW_BLUE } from './materials.js?v=0063fe52';
-import { InstanceCuller } from './lowcull.js?v=0063fe52';
-import { initAudio, sfx, music, audioState, configureAudio, audioStatus, renderEndingOffline } from './audio.js?v=0063fe52';
-import { progress, starsFor, titleFor } from './progress.js?v=0063fe52';
-import { drawScoreCard, showCardUI, hideCardUI } from './scorecard.js?v=0063fe52';
-import { cosmetics, SLOTS, ITEMS, BY_ID } from './cosmetics.js?v=0063fe52';
-import { applyLook, Trail } from './costume.js?v=0063fe52';
-import { createLeaderboard, NAME_MAX } from './leaderboard.js?v=0063fe52';
-import { Obstacles, planStage, routeCheck } from './obstacles.js?v=0063fe52';
-import { RouteGraph } from './routegraph.js?v=0063fe52';
-import { rng, clamp, lerp, damp, angleDamp, angleDiff, glowTexture, textTexture, worldUV } from './util.js?v=0063fe52';
+import { PostFX, loadEnvironment, LampCones, Footprints, SnowPuffs, ChimneySmoke, Sparkles, Shockwaves, Governor } from './fx.js?v=9e6ba718';
+import { CONFIG, applyUrlOverrides, resolveQuality, difficulty, ethPerBlock, formatEth, comboMult, fmt } from './config.js?v=9e6ba718';
+import { initAssets } from './assets.js?v=9e6ba718';
+import { World } from './world.js?v=9e6ba718';
+import { Interiors } from './interiors.js?v=9e6ba718';
+import { PineSystem } from './pines.js?v=9e6ba718';
+import { createSanta } from './santa.js?v=9e6ba718';
+import { Input } from './input.js?v=9e6ba718';
+import { HUD } from './hud.js?v=9e6ba718';
+import { Snow, Particles, Flights, Fireworks } from './effects.js?v=9e6ba718';
+import { makeLogoMesh, logoSVG } from './logo.js?v=9e6ba718';
+import { WINDOW_WARM, WINDOW_BLUE } from './materials.js?v=9e6ba718';
+import { InstanceCuller } from './lowcull.js?v=9e6ba718';
+import { initAudio, resumeAudio, sfx, music, audioState, configureAudio, audioStatus, renderEndingOffline } from './audio.js?v=9e6ba718';
+import { progress, starsFor, titleFor } from './progress.js?v=9e6ba718';
+import { drawScoreCard, showCardUI, hideCardUI } from './scorecard.js?v=9e6ba718';
+import { cosmetics, SLOTS, ITEMS, BY_ID } from './cosmetics.js?v=9e6ba718';
+import { applyLook, Trail } from './costume.js?v=9e6ba718';
+import { createLeaderboard, NAME_MAX } from './leaderboard.js?v=9e6ba718';
+import { Obstacles, planStage, routeCheck } from './obstacles.js?v=9e6ba718';
+import { RouteGraph } from './routegraph.js?v=9e6ba718';
+import { rng, clamp, lerp, damp, angleDamp, angleDiff, glowTexture, textTexture, worldUV } from './util.js?v=9e6ba718';
 
 applyUrlOverrides();
 const params = new URLSearchParams(location.search);
@@ -69,7 +69,7 @@ function pixelRatioFor(w, h) {
   return Math.max(0.35, pr);
 }
 renderer.setPixelRatio(pixelRatioFor(...viewSize()));
-renderer.setSize(...viewSize());
+renderer.setSize(...viewSize(), false); // no inline px style: CSS keeps the canvas at 100% x 100%
 const LOOK = CONFIG.look;
 renderer.toneMapping = LOOK.toneMapping === 'AgX' ? THREE.AgXToneMapping : THREE.ACESFilmicToneMapping; renderer.toneMappingExposure = LOOK.exposure;
 renderer.outputColorSpace = THREE.SRGBColorSpace;
@@ -105,16 +105,64 @@ function applySize(force = false) {
   const [w, h] = viewSize(), pr = pixelRatioFor(w, h), key = `${w}x${h}@${pr.toFixed(3)}`;
   if (!force && key === _sizeKey) return; _sizeKey = key;
   camera.aspect = w / h; camera.updateProjectionMatrix();
-  renderer.setPixelRatio(pr); renderer.setSize(w, h); post.setSize(w, h);
+  // updateStyle=false: the canvas CSS box stays 100% x 100% (style.css #c), so it always follows the window on rotation
+  // even if iOS reports a stale visualViewport size for a moment; inline px sizes used to pin the old orientation
+  renderer.setPixelRatio(pr); renderer.setSize(w, h, false); post.setSize(w, h);
   document.documentElement.style.setProperty('--vh', h + 'px');
 }
-addEventListener('resize', () => applySize());
-addEventListener('orientationchange', () => { applySize(); setTimeout(() => applySize(true), 350); setTimeout(() => applySize(true), 900); });
-window.visualViewport?.addEventListener('resize', () => applySize());
+// rotation / resize: iOS Safari reports the new viewport late (and visualViewport sometimes after resize), so size now
+// and force re-checks ~300 ms and ~900 ms later. Rotation is never locked (manifest orientation: any, no orientation.lock).
+let _reT1 = 0, _reT2 = 0;
+function onViewChange() {
+  applySize(); clearTimeout(_reT1); clearTimeout(_reT2);
+  _reT1 = setTimeout(() => applySize(true), 300); _reT2 = setTimeout(() => applySize(true), 900);
+}
+addEventListener('resize', onViewChange);
+addEventListener('orientationchange', onViewChange);
+window.visualViewport?.addEventListener('resize', onViewChange);
+screen.orientation?.addEventListener?.('change', onViewChange);
+matchMedia('(orientation: portrait)').addEventListener?.('change', onViewChange);
 document.addEventListener('fullscreenchange', () => setTimeout(() => applySize(true), 100));
-// WebGL context loss (iOS backgrounding / GPU reset): stop, tell the player, reload on restore
-canvas.addEventListener('webglcontextlost', e => { e.preventDefault(); G.contextLost = true; window.__toast?.('WebGL context lost (GPU reset / memory pressure)'); const d = document.createElement('div'); d.id = 'ctxLost'; d.textContent = 'Graphics were reset by the device - tap to reload'; d.onclick = () => location.reload(); document.body.appendChild(d); }, false);
-canvas.addEventListener('webglcontextrestored', () => location.reload(), false);
+document.addEventListener('webkitfullscreenchange', () => setTimeout(() => applySize(true), 100));
+// WebGL context loss (iOS drops the context when the tab is backgrounded, e.g. after 'Post on X', or on GPU reset).
+// Recover in place: three re-creates programs / buffers / textures / render targets lazily after 'webglcontextrestored';
+// we re-bake the only GPU-only content (night IBL, pine impostors), resize the composer and redraw shadows. If no
+// restore arrives within ~2 s of the page being visible, a small 'Tap to resume' card reloads (progress is in localStorage).
+const CTX = { lost: false, timer: 0, gen: 0 };
+function ctxOverlay(show) {
+  let d = document.getElementById('ctxLost');
+  if (!show) { d?.remove(); return; }
+  if (d) return;
+  d = document.createElement('div'); d.id = 'ctxLost'; d.textContent = 'Graphics were paused by the device - tap to resume';
+  d.onclick = () => location.reload(); document.body.appendChild(d);
+}
+function armCtxFallback() {
+  clearTimeout(CTX.timer); if (document.hidden) return; // wait until the page is visible again
+  CTX.timer = setTimeout(() => { if (CTX.lost) ctxOverlay(true); }, 2000);
+}
+async function restoreGraphics() {
+  const gen = ++CTX.gen;
+  clearTimeout(CTX.timer);
+  if (Q.env) { const old = scene.environment; if (await loadEnvironment(renderer, scene, LOOK.hdri, LOOK.envIntensity) && old && old !== scene.environment) old.dispose(); }
+  if (gen !== CTX.gen || renderer.getContext().isContextLost()) return; // lost again meanwhile
+  pines?.rebake?.(renderer);
+  applySize(true); renderer.shadowMap.needsUpdate = true; _sh.n = 0; _sh.x = 1e9;
+  CTX.lost = false; G.contextLost = false; ctxOverlay(false);
+  console.info('[gfx] WebGL context restored in place');
+}
+canvas.addEventListener('webglcontextlost', e => { e.preventDefault(); CTX.lost = true; G.contextLost = true; armCtxFallback(); }, false);
+canvas.addEventListener('webglcontextrestored', () => { restoreGraphics().catch(err => { console.warn('[gfx] restore failed', err); ctxOverlay(true); }); }, false);
+// back from another app / tab (visibilitychange) or from the bfcache (pageshow persisted): resize, redraw, resume audio
+function onPageBack() {
+  if (document.hidden) return;
+  try { screen.orientation?.unlock?.(); } catch (e) { /* not supported */ }
+  onViewChange(); renderer.shadowMap.needsUpdate = true;
+  if (renderer.getContext().isContextLost()) { CTX.lost = true; G.contextLost = true; }
+  if (CTX.lost) armCtxFallback();
+  resumeAudio();
+}
+document.addEventListener('visibilitychange', onPageBack);
+addEventListener('pageshow', onPageBack);
 // runtime fallback for weak devices (only when quality = auto)
 const governor = new Governor(!Q.auto || QA_FIXED_EARLY ? [] : [
   { name: 'mascot fur shells + flame light off', apply: () => santa?.lowFx?.() },
@@ -137,7 +185,7 @@ const G = {
   gossipBusy: false, hint: '', endingT: 0, lastTick: 0, levelObjects: [],
   combo: 0, bestCombo: 0, lastDeliverT: -1e9, boosted: 0, totalBoosted: 0,
 };
-import { Nav } from './nav.js?v=0063fe52';
+import { Nav } from './nav.js?v=9e6ba718';
 const _dbs = new THREE.Vector2();
 const player = { pos: new THREE.Vector3(), vel: new THREE.Vector3(), heading: 0, speed: 0, jy: 0, vy: 0, air: false, coyote: 0, jumpBuf: 0, sprintK: 0, holdT: 0, surfY: 0, paved: false };
 const cam = { yaw: 0, pos: new THREE.Vector3(), look: new THREE.Vector3(), dist: CONFIG.camera.distance };
@@ -326,12 +374,49 @@ const WD = { slot: 'hat', preview: null, yaw: 0, spin: 0.55, drag: null };
 function updateWardDot() { const n = cosmetics.newCount(), d = $('wardNew'); if (!d) return; d.textContent = n; d.classList.toggle('hidden', !n); }
 function openWardrobe() {
   $('title').classList.add('hidden'); $('wardrobe').classList.remove('hidden');
-  G.wardrobe = true; WD.yaw = player.heading + 0.5; WD.preview = null; WD.camInit = false; renderWardrobe();
+  G.wardrobe = true; WD.yaw = player.heading + 0.5; WD.preview = null; WD.camInit = false; WD.box = null; renderWardrobe(); wardrobeGift();
 }
 function closeWardrobe() {
   cosmetics.markSeen(WD.slot); G.wardrobe = false; WD.preview = null; applyLook(santa, cosmetics.look());
   camera.clearViewOffset(); santa.root.rotation.y = player.heading; $('wardrobe').classList.add('hidden');
+  wardrobeGift(); wardrobeLights(false);
  $('title').classList.remove('hidden'); updateWardDot();
+}
+// the carried gift hides the suit: only shown in the wardrobe on the Back tab (it is part of the back-item silhouette)
+function wardrobeGift() { santa.gift.visible = !G.wardrobe || WD.slot === 'back'; }
+// ---- wardrobe preview light rig. Root cause of the near-black preview: the mascot is lit only by the night rig
+// (deep-blue hemisphere + a moon fixed at (35,70,22) that back-lights it for half the turntable + a damped night IBL);
+// on LOW there are no point lights at all (pool = 0, gift light hidden), on MEDIUM/HIGH the only near light is the
+// blue gift light that tints the suit. The rig re-uses the EXISTING moon + hemisphere (same light count => no shader
+// recompile, no extra per-fragment cost): while the wardrobe is open the moon becomes a warm camera-side key that
+// follows the camera, the hemisphere a neutral fill, the gift light is dimmed, and a soft additive backdrop glow sits
+// behind the mascot so it separates from the night. Everything is restored the frame the wardrobe closes.
+const WL = { on: false, moonCol: new THREE.Color(), hemiSky: new THREE.Color(), hemiGnd: new THREE.Color(), backdrop: null,
+  key: new THREE.Color(0xfff0dc), sky: new THREE.Color(0xc4d2f0), gnd: new THREE.Color(0x5c5058) };
+const _wlK = new THREE.Vector3();
+function wardrobeLights(on) {
+  if (on && !WL.on) { WL.moonCol.copy(moon.color); WL.hemiSky.copy(hemi.color); WL.hemiGnd.copy(hemi.groundColor); }
+  if (!on && WL.on) { moon.color.copy(WL.moonCol); hemi.color.copy(WL.hemiSky); hemi.groundColor.copy(WL.hemiGnd); renderer.shadowMap.needsUpdate = true; _sh.n = 0; _sh.x = 1e9; }
+  WL.on = on;
+  if (!WL.backdrop) {
+    WL.backdrop = new THREE.Sprite(new THREE.SpriteMaterial({ map: glowTexture(), color: 0x7fa6e6, transparent: true, opacity: 0.3, depthWrite: false, blending: THREE.AdditiveBlending, fog: false }));
+    WL.backdrop.renderOrder = -1; WL.backdrop.visible = false; scene.add(WL.backdrop);
+  }
+  WL.backdrop.visible = on;
+  if (!on) return;
+  const base = santa.root.position;
+  // key: from the camera side, up and to the left (camera-relative so the turntable is lit at every angle)
+  _wlK.subVectors(camera.position, base).setY(0).normalize();
+  const sx = _wlK.z, sz = -_wlK.x; // camera-right
+  _wlK.set(_wlK.x * 0.8 - sx * 0.55, 0.95, _wlK.z * 0.8 - sz * 0.55).normalize();
+  moon.position.copy(base).addScaledVector(_wlK, 40); moon.target.position.copy(base); moon.target.updateMatrixWorld();
+  moon.color.copy(WL.key); moon.intensity = 2.2;
+  hemi.color.copy(WL.sky); hemi.groundColor.copy(WL.gnd); hemi.intensity = 1.1;
+  if (renderer.shadowMap.enabled) renderer.shadowMap.needsUpdate = true;
+  giftLight.intensity = santa.gift.visible ? 0.6 : 0; // the blue gift light tinted the suit (gift hidden => off)
+  // backdrop glow: behind the mascot (away from the camera), at chest height
+  _wlK.subVectors(base, camera.position).setY(0).normalize();
+  WL.backdrop.position.set(base.x + _wlK.x * 2.2, base.y + 1.0, base.z + _wlK.z * 2.2); WL.backdrop.scale.setScalar(4.2);
 }
 function previewLook() { const L = cosmetics.look(); if (WD.preview) L[WD.preview.slot] = WD.preview; applyLook(santa, L); }
 function renderWardrobe() {
@@ -349,7 +434,7 @@ function renderWardrobe() {
   $('wardInfo').innerHTML = WD.preview && !cosmetics.isUnlocked(WD.preview)
     ? `Previewing <b>${cur.name}</b> · 🔒 ${cosmetics.reqText(cur)} (${cosmetics.reqProgress(cur).join('/')})`
     : `Wearing <b>${cur.name}</b> ${SLOTS.find(s => s.id === WD.slot).name.toLowerCase()}`;
-  for (const b of $('wardTabs').children) b.onclick = () => { cosmetics.markSeen(WD.slot); WD.slot = b.dataset.s; WD.preview = null; previewLook(); sfx.hold?.(); renderWardrobe(); };
+  for (const b of $('wardTabs').children) b.onclick = () => { cosmetics.markSeen(WD.slot); WD.slot = b.dataset.s; WD.preview = null; previewLook(); wardrobeGift(); WD.box = null; sfx.hold?.(); renderWardrobe(); };
   for (const b of $('wardGrid').children) b.onclick = () => {
     const it = BY_ID[b.dataset.id];
     if (cosmetics.isUnlocked(it)) { cosmetics.equip(it.id); WD.preview = null; sfx.equip?.(); }
@@ -365,21 +450,37 @@ function bindWardrobeDrag() {
 }
 const _wFwd = new THREE.Vector3(), _wSide = new THREE.Vector3(), _wLook = new THREE.Vector3();
 const _wSz = new THREE.Vector2();
+const _wBox = new THREE.Box3(), _wInv = new THREE.Matrix4();
 function wardrobeCamera(dt) {
   if (!WD.drag) WD.yaw += dt * WD.spin;
   santa.root.rotation.y = WD.yaw;
-  const base = santa.root.position, asp = camera.aspect, portrait = asp < 1, fov = 34;
-  // camera faces the spawn street; the mascot sits in the free part of the screen (right in landscape, top in portrait)
+  const base = santa.root.position, fov = 34;
+  // character extent (hat / topper tip to shoes) in root-local metres, measured once per open / tab change
+  if (!WD.box) {
+    santa.root.updateMatrixWorld(true); _wInv.copy(santa.root.matrixWorld).invert(); _wBox.makeEmpty();
+    santa.root.traverseVisible(o => { if (o.isMesh && !o.isSkinnedMesh && o.geometry && !o.isSprite) { // skinned body box is a padded culling box -> head-bound parts (flame, toppers) give the top
+      o.geometry.boundingBox || o.geometry.computeBoundingBox();
+      _wBox.union(new THREE.Box3().copy(o.geometry.boundingBox).applyMatrix4(new THREE.Matrix4().multiplyMatrices(_wInv, o.matrixWorld))); } });
+    const y0 = 0, y1 = Number.isFinite(_wBox.max.y) ? THREE.MathUtils.clamp(_wBox.max.y + 0.06, 1.8, 2.6) : 1.85;
+    WD.box = { y0, y1, h: y1 - y0, w: 1.25 }; // width covers the arms / back items through the turntable // + flame tips above the hat; width covers arms / back items on the turntable
+  }
+  // free part of the screen = outside the wardrobe panel (above it in portrait, right of it in landscape)
+  const sz = renderer.getSize(_wSz), fw = sz.x, fh = sz.y, portrait = fw < fh;
+  const pr = document.querySelector('#wardrobe .wardPanel')?.getBoundingClientRect();
+  let fx0 = 0, fx1 = fw, fy0 = 0, fy1 = fh;
+  if (pr && pr.width > 0) { if (portrait) fy1 = Math.max(fh * 0.3, pr.top - 6); else fx0 = Math.min(fw * 0.7, pr.right + 6); }
+  fy0 += Math.min(fh * 0.06, 14);
+  const freeW = fx1 - fx0, freeH = fy1 - fy0, th = Math.tan(THREE.MathUtils.degToRad(fov / 2)), asp = fw / fh;
+  // distance so the whole body (with a margin) fits the free height / width
+  const dH = WD.box.h * 1.12 * fh / (2 * th * freeH), dW = WD.box.w * fw / (2 * th * asp * freeW);
+  const d = THREE.MathUtils.clamp(Math.max(dH, dW), 2.2, 14);
   _wFwd.set(Math.sin(player.heading), 0, Math.cos(player.heading));
-  _wSide.set(_wFwd.z, 0, -_wFwd.x);
-  const th = Math.tan(THREE.MathUtils.degToRad(fov / 2)), d = portrait ? 2.3 / (0.42 * th) / 2 : 2.95 / th / 2;
-  const cy = base.y + 0.9;
-  camera.position.set(base.x + _wFwd.x * d, cy + 0.35, base.z + _wFwd.z * d);
+  const cy = base.y + (WD.box.y0 + WD.box.y0 + WD.box.h) / 2;
+  camera.position.set(base.x + _wFwd.x * d, cy + 0.25, base.z + _wFwd.z * d);
   _wLook.set(base.x, cy, base.z);
   camera.lookAt(_wLook); cam.pos.copy(camera.position); cam.look.copy(_wLook);
-  // shift the projection (not the aim) so the mascot sits in the free part of the screen
-  const sz = renderer.getSize(_wSz), fw = sz.x, fh = sz.y;
-  if (portrait) camera.setViewOffset(fw, fh, 0, fh * 0.22, fw, fh); else camera.setViewOffset(fw, fh, -fw * 0.19, 0, fw, fh);
+  // shift the projection (not the aim) so the body centre lands in the centre of the free area
+  camera.setViewOffset(fw, fh, fw / 2 - (fx0 + fx1) / 2, fh / 2 - (fy0 + fy1) / 2, fw, fh);
   if (camera.fov !== fov) { camera.fov = fov; camera.updateProjectionMatrix(); }
 }
 // unlock toasts (stacked above every screen, one bell per batch)
@@ -466,11 +567,11 @@ function bindScreenUI() {
   const toggleFs = async () => {
     try {
       if (isFs()) await (document.exitFullscreen || document.webkitExitFullscreen).call(document);
-      else { await req.call(el, { navigationUI: 'hide' }); try { await screen.orientation?.lock?.('landscape'); } catch (e) { /* not supported */ } }
+      else await req.call(el, { navigationUI: 'hide' }); // no orientation.lock: rotation stays free in fullscreen too
     } catch (e) { console.info('[fullscreen] not available', e?.message); }
   };
   for (const id of ['fsBtn', 'fsBtnTitle']) { $(id).classList.toggle('hidden', !fsOK); $(id).onclick = e => { e.stopPropagation(); toggleFs(); }; }
-  const upd = () => { $('fsBtn').textContent = isFs() ? '🗗' : '⛶'; };
+  const upd = () => { $('fsBtn').textContent = isFs() ? '🗗' : '⛶'; if (!isFs()) { try { screen.orientation?.unlock?.(); } catch (e) { /* not supported */ } } };
   document.addEventListener('fullscreenchange', upd); document.addEventListener('webkitfullscreenchange', upd);
   if (iOS && !standalone && !localStorage.getItem('xmas.iosTip')) {
     setTimeout(() => $('iosTip').classList.remove('hidden'), 1200);
@@ -1409,6 +1510,7 @@ function frame(dt) {
   lightT -= dt; if (lightT <= 0) { lightT = 0.12; updateLightPool(); } fadeLightPool(dt);
   const focus = G.state === 'playing' || G.state === 'paused' || G.state === 'levelComplete' || G.state === 'gameOver' ? player.pos : _ORIGIN;
   updateShadow(focus);
+  if (G.wardrobe && G.state === 'title') wardrobeLights(true); else if (WL.on) wardrobeLights(false);
   snow.update(t, _v0.set(camera.position.x, 0, camera.position.z), G.storm, G.weather);
   if (G.state !== 'title' && G.state !== 'ending') {
     const S = { score: G.score, delivered: G.delivered, total: G.total, timer: G.timer, level: G.level, levelName: CONFIG.levels[G.level].name, mump: G.mumpLeft > 0, mumpLeft: G.mumpLeft, mumpDur: G.mumpDur, inRange: G.inRange || 0, powerupsLeft: G.powerups.filter(p => p.active).length, storm: G.storm, hint: G.hint, bonusFlash: G.bonusFlash };
@@ -1450,10 +1552,10 @@ function debugAPI() {
     G, player, CONFIG, renderer, world, santa, scene, camera, post, get hud() { return hud; }, get nav() { return nav; },
     get state() { return G.state; },
     cosmetics, progress, showUnlocks, openWardrobe, closeWardrobe, WD, lb, openBoard, closeBoard, tryLook: (ids) => { const L = cosmetics.look(); for (const id of ids) { const it = BY_ID[id]; L[it.slot] = it; } applyLook(santa, L); return Object.values(L).map(i => i.id); },
-    resolveWindows: async (rects) => { const { resolveWindows } = await import('./interiors.js?v=0063fe52'); const out = {}; for (const b of world.buildings) { if (!b.isGLB || out[b.type] || !rects[b.type]) continue; out[b.type] = resolveWindows(b.holder.children[0], b.holder, rects[b.type]); } return out; },
-    facadeShots: async (side = 0, mask = false) => { const { facadeShot } = await import('./interiors.js?v=0063fe52'); const out = {}; for (const b of world.buildings) { if (!b.isGLB || out[b.type]) continue; out[b.type] = facadeShot(b.holder.children[0], b.holder, renderer, side, 48, mask); } return out; },
+    resolveWindows: async (rects) => { const { resolveWindows } = await import('./interiors.js?v=9e6ba718'); const out = {}; for (const b of world.buildings) { if (!b.isGLB || out[b.type] || !rects[b.type]) continue; out[b.type] = resolveWindows(b.holder.children[0], b.holder, rects[b.type]); } return out; },
+    facadeShots: async (side = 0, mask = false) => { const { facadeShot } = await import('./interiors.js?v=9e6ba718'); const out = {}; for (const b of world.buildings) { if (!b.isGLB || out[b.type]) continue; out[b.type] = facadeShot(b.holder.children[0], b.holder, renderer, side, 48, mask); } return out; },
     // dev: detect lit window rects on each Tripo building type (output -> assets/windows.js)
-    detectWindows: async () => { const { detectWindows } = await import('./interiors.js?v=0063fe52'); const out = {}; for (const b of world.buildings) { if (!b.isGLB || out[b.type]) continue; const o = b.holder.children[0]; out[b.type] = detectWindows(o, b.holder, renderer); } return out; },
+    detectWindows: async () => { const { detectWindows } = await import('./interiors.js?v=9e6ba718'); const out = {}; for (const b of world.buildings) { if (!b.isGLB || out[b.type]) continue; const o = b.holder.children[0]; out[b.type] = detectWindows(o, b.holder, renderer); } return out; },
     start: (lv = 0) => { G.qaMute = true; initAudio(false); startLevel(lv); },
     // stage beatability: road-graph route estimate vs timer for one stage (i) or all of them
     routeCheck: (i = null) => { const sp = spawnPoint(); const one = k => routeCheck(graph, planStage(world, graph, k, sp), sp); return i == null ? CONFIG.levels.map((_, k) => one(k)) : one(i); },

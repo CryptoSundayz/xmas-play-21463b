@@ -1,6 +1,6 @@
 // Shareable score card: a 1200x675 PNG drawn on a 2D canvas (mascot portrait captured from the live WebGL view,
 // stage + result + stats + equipped cosmetics + date + play URL), with Download / Share / Post on X actions.
-import { CONFIG, formatEth } from './config.js?v=0063fe52';
+import { CONFIG, formatEth } from './config.js?v=9e6ba718';
 
 const W = 1200, H = 675;
 const C = { navy: '#050b18', navy2: '#0b1d44', blue: '#51b1fe', blue2: '#8fdcff', red: '#ff4d5e', green: '#3dff9a', gold: '#ffd36b', ink: '#eaf4ff', dim: 'rgba(214,232,255,0.72)' };
@@ -152,7 +152,14 @@ export function showCardUI(canvas, info, toast) {
     try { if (b && window.ClipboardItem && navigator.clipboard?.write) { await navigator.clipboard.write([new ClipboardItem({ 'image/png': b })]); toast?.('Score card image copied'); return; } } catch (err) { /* text below */ }
     try { await navigator.clipboard.writeText(text); toast?.('Score text + link copied'); } catch (err) { toast?.('Copy blocked — use Download instead'); }
   };
-  $('cardX').onclick = e => { e.stopPropagation(); window.open('https://x.com/intent/post?text=' + encodeURIComponent(text), '_blank', 'noopener'); };
+  // a real <a target=_blank> click inside the tap: iOS opens a new tab / the X app and never navigates the game tab away
+  // (window.open with features can be turned into a same-tab load in standalone / in-app browsers)
+  $('cardX').onclick = e => {
+    e.stopPropagation();
+    const a = document.createElement('a'); a.href = 'https://x.com/intent/post?text=' + encodeURIComponent(text);
+    a.target = '_blank'; a.rel = 'noopener noreferrer'; a.style.display = 'none';
+    document.body.appendChild(a); a.click(); a.remove();
+  };
   $('ovCardImg').onclick = () => { const v = $('cardView'); v.querySelector('img').src = url; v.classList.remove('hidden'); };
   $('cardView').onclick = () => $('cardView').classList.add('hidden');
 }
