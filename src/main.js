@@ -1,20 +1,20 @@
 // Santa's Block Delivery — game bootstrap, loop and state machine.
 import * as THREE from 'three';
-import { PostFX, loadEnvironment, LampCones, Footprints, SnowPuffs, ChimneySmoke, Sparkles, Shockwaves, Governor } from './fx.js?v=4c34af6b';
-import { CONFIG, applyUrlOverrides, resolveQuality, difficulty, ethPerBlock, formatEth, comboMult, fmt } from './config.js?v=4c34af6b';
-import { initAssets } from './assets.js?v=4c34af6b';
-import { World } from './world.js?v=4c34af6b';
-import { Interiors } from './interiors.js?v=4c34af6b';
-import { PineSystem } from './pines.js?v=4c34af6b';
-import { createSanta } from './santa.js?v=4c34af6b';
-import { Input } from './input.js?v=4c34af6b';
-import { HUD } from './hud.js?v=4c34af6b';
-import { Snow, Particles, Flights, Fireworks } from './effects.js?v=4c34af6b';
-import { makeLogoMesh, logoSVG } from './logo.js?v=4c34af6b';
-import { WINDOW_WARM, WINDOW_BLUE } from './materials.js?v=4c34af6b';
-import { InstanceCuller } from './lowcull.js?v=4c34af6b';
-import { initAudio, sfx, music, audioState, configureAudio, audioStatus, renderEndingOffline } from './audio.js?v=4c34af6b';
-import { rng, clamp, lerp, damp, angleDamp, angleDiff, glowTexture, textTexture, worldUV } from './util.js?v=4c34af6b';
+import { PostFX, loadEnvironment, LampCones, Footprints, SnowPuffs, ChimneySmoke, Sparkles, Shockwaves, Governor } from './fx.js?v=8fa77074';
+import { CONFIG, applyUrlOverrides, resolveQuality, difficulty, ethPerBlock, formatEth, comboMult, fmt } from './config.js?v=8fa77074';
+import { initAssets } from './assets.js?v=8fa77074';
+import { World } from './world.js?v=8fa77074';
+import { Interiors } from './interiors.js?v=8fa77074';
+import { PineSystem } from './pines.js?v=8fa77074';
+import { createSanta } from './santa.js?v=8fa77074';
+import { Input } from './input.js?v=8fa77074';
+import { HUD } from './hud.js?v=8fa77074';
+import { Snow, Particles, Flights, Fireworks } from './effects.js?v=8fa77074';
+import { makeLogoMesh, logoSVG } from './logo.js?v=8fa77074';
+import { WINDOW_WARM, WINDOW_BLUE } from './materials.js?v=8fa77074';
+import { InstanceCuller } from './lowcull.js?v=8fa77074';
+import { initAudio, sfx, music, audioState, configureAudio, audioStatus, renderEndingOffline } from './audio.js?v=8fa77074';
+import { rng, clamp, lerp, damp, angleDamp, angleDiff, glowTexture, textTexture, worldUV } from './util.js?v=8fa77074';
 
 applyUrlOverrides();
 const params = new URLSearchParams(location.search);
@@ -81,6 +81,8 @@ moon.castShadow = Q.shadows; moon.shadow.mapSize.set(Q.shadowMapSize, Q.shadowMa
 { const S = CONFIG.performance.shadowFrustum; Object.assign(moon.shadow.camera, { left: -S, right: S, top: S, bottom: -S, near: 1, far: 160 }); }
 moon.shadow.bias = -0.0004; moon.shadow.normalBias = 0.035; moon.shadow.radius = Q.shadowMapSize >= 4096 ? 4 : 3; moon.shadow.blurSamples = 16;
 scene.add(moon, moon.target);
+// the shadow map is re-rendered only when something in it changed (see updateShadow), not unconditionally every frame
+renderer.shadowMap.autoUpdate = false; renderer.shadowMap.needsUpdate = true;
 
 // pooled point lights (windows, lamps, tree) — fixed count => no shader recompiles
 const lightPool = [];
@@ -127,7 +129,7 @@ const G = {
   gossipBusy: false, hint: '', endingT: 0, lastTick: 0, levelObjects: [],
   combo: 0, bestCombo: 0, lastDeliverT: -1e9, boosted: 0, totalBoosted: 0,
 };
-import { Nav } from './nav.js?v=4c34af6b';
+import { Nav } from './nav.js?v=8fa77074';
 const _dbs = new THREE.Vector2();
 const player = { pos: new THREE.Vector3(), vel: new THREE.Vector3(), heading: 0, speed: 0, jy: 0, vy: 0, air: false, coyote: 0, jumpBuf: 0, sprintK: 0, holdT: 0, surfY: 0, paved: false };
 const cam = { yaw: 0, pos: new THREE.Vector3(), look: new THREE.Vector3(), dist: CONFIG.camera.distance };
@@ -191,6 +193,9 @@ async function boot() {
   fireworks.onLaunch = r => sfx.firework(r.logo ? 1 : 0.45 + Math.random() * 0.3, r.fuse);
   shardOrbit = makeShardOrbit(); scene.add(shardOrbit);
   boostTrail = makeBoostTrail(); scene.add(boostTrail.mesh);
+  // MEDIUM / HIGH: whole-map instanced props (fences, lamps, decor kits, snowmen...) only draw what is near the
+  // camera or inside its (widened) view cone - nothing on screen is dropped, the rest no longer costs main + shadow pass
+  if (Q.name !== 'low' && PERF.viewCull !== false) culler = new InstanceCuller(scene, { radius: PERF.viewCullNear ?? 40, view: true, far: camera.far, margin: 0.28 });
 
   // title camera
   resetPlayer();
@@ -230,6 +235,7 @@ function applyLow(atLoad = false) {
     _bs.setFromObject(c).getSize(_sz); if (_sz.x > 24 || _sz.z > 24) continue;
     props.push(c);
   }
+  culler?.dispose();
   culler = new InstanceCuller(scene, { radius: L.cullRadius ?? 55, props, propRadius: L.propRadius ?? 55 });
   camera.far = L.far ?? 160; camera.updateProjectionMatrix();
   if (!atLoad) scene.traverse(o => { if (o.material) [].concat(o.material).forEach(m => m.needsUpdate = true); }); // lights/shadows changed
@@ -549,7 +555,7 @@ function updatePlayer(dt) {
   }
   world.collide(player.pos, P.radius, player.jy);
   // velocity follows actual displacement (so walls stop sliding momentum)
-  if (dt > 0) { const ax2 = (player.pos.x - before.x) / dt, az2 = (player.pos.z - before.z) / dt; player.vel.x = lerp(player.vel.x, ax2, 0.5); player.vel.z = lerp(player.vel.z, az2, 0.5); }
+  if (dt > 0) { const ax2 = (player.pos.x - before.x) / dt, az2 = (player.pos.z - before.z) / dt; const kv = 1 - Math.exp(-41.6 * dt); player.vel.x = lerp(player.vel.x, ax2, kv); player.vel.z = lerp(player.vel.z, az2, kv); } // = 0.5 per frame at 60 fps, dt-independent
   player.speed = Math.hypot(player.vel.x, player.vel.z);
   if (hasInput && player.speed > 0.3) {
     const dir = ice ? Math.atan2(wantX, wantZ) : Math.atan2(player.vel.x, player.vel.z);
@@ -883,16 +889,56 @@ function updateStorm(dt) {
   post.setWeather?.(st);
 }
 
+// Pool of real point lights (every one is a per-fragment loop iteration in every lit material, so the pool is
+// small): the candidates whose range best covers the area Santa / the camera look at win a slot. A slot that loses
+// its light fades out before it is re-used and the new light fades in, so lights never pop on / off.
+const _poolTop = [], _poolScore = new Map(), _poolSlot = [];
+// Moon shadow: the shadow camera is snapped to whole shadow-map texels (no shimmer while Santa walks) and the map is
+// refreshed only when the snapped camera moved or a shadow caster in its frustum moves (Santa walking / jumping,
+// orbiting reindeer); idle scenes refresh at ~20 Hz for the idle animation, paused / overlay states not at all.
+const _sh = { x: 1e9, z: 1e9, n: 0, u: new THREE.Vector3(), v: new THREE.Vector3() };
+function updateShadow(focus) {
+  if (!moon.castShadow || !renderer.shadowMap.enabled) return;
+  const S = CONFIG.performance.shadowFrustum, tex = 2 * S / moon.shadow.mapSize.x;
+  // light-space axes (fixed light direction): snap the focus in that basis
+  const dir = _v1.set(35, 70, 22).normalize(), u = _sh.u.set(0, 1, 0).cross(dir).normalize(), v = _sh.v.copy(dir).cross(u);
+  const a = Math.round(focus.dot(u) / tex) * tex, b = Math.round(focus.dot(v) / tex) * tex, c = focus.dot(dir);
+  const fx = u.x * a + v.x * b + dir.x * c, fy = u.y * a + v.y * b + dir.y * c, fz = u.z * a + v.z * b + dir.z * c;
+  moon.position.set(fx + 35, fy + 70, fz + 22); moon.target.position.set(fx, fy, fz);
+  const moved = fx !== _sh.x || fz !== _sh.z; _sh.x = fx; _sh.z = fz;
+  const st = G.state, live = st === 'playing' || st === 'title' || st === 'intro' || st === 'ending';
+  const moving = st === 'playing' && (player.speed > 0.05 || player.air) || st === 'intro' || st === 'ending' || walkersNear(fx, fz, S + 6);
+  if (moved || moving || (live && ++_sh.n % 3 === 0)) renderer.shadowMap.needsUpdate = true;
+}
+function walkersNear(x, z, r) {
+  for (const w of world.walkers || []) { const o = w.rd?.group; if (!o || w.idle) continue; const p = o.position; if ((p.x - x) ** 2 + (p.z - z) ** 2 < r * r) return true; }
+  return false;
+}
 function updateLightPool() {
-  const px = player.pos.x, pz = player.pos.z;
-  const c = world.lightCandidates;
-  const scored = [];
-  for (const l of c) { const d = (l.x - px) ** 2 + (l.z - pz) ** 2; if (d < 90 * 90) scored.push([l.always ? d * 0.15 : d, l]); }
-  scored.sort((a, b) => a[0] - b[0]);
+  const fx = player.pos.x * 0.6 + cam.look.x * 0.4, fz = player.pos.z * 0.6 + cam.look.z * 0.4, n = lightPool.length;
+  _poolTop.length = 0; _poolScore.clear();
+  for (const l of world.lightCandidates) {
+    const d2 = (l.x - fx) ** 2 + (l.z - fz) ** 2; if (d2 > 90 * 90) continue;
+    const r = Math.max(1, l.distance || 16), sc = (l.always ? 0.15 : 1) * d2 / (r * r); // fraction of its own reach
+    if (_poolTop.length < n || sc < _poolScore.get(_poolTop[_poolTop.length - 1])) {
+      _poolScore.set(l, sc); let i = Math.min(_poolTop.length, n - 1); _poolTop[i] = l;
+      while (i > 0 && _poolScore.get(_poolTop[i - 1]) > sc) { _poolTop[i] = _poolTop[i - 1]; _poolTop[--i] = l; }
+    }
+  }
+  for (let i = 0; i < n; i++) { const S = _poolSlot[i] || (_poolSlot[i] = { l: null, k: 0 }); S.keep = S.l && _poolTop.includes(S.l); }
+  for (const l of _poolTop) { // free slot (faded out) for each newly wanted light
+    if (_poolSlot.some(S => S.l === l)) continue;
+    const S = _poolSlot.find(S => !S.l || (!S.keep && S.k < 0.03)); if (!S) continue;
+    const L = lightPool[_poolSlot.indexOf(S)]; S.l = l; S.keep = true; S.k = 0;
+    L.position.set(l.x, l.y, l.z); L.distance = l.distance;
+  }
+}
+function fadeLightPool(dt) { // every frame: ease intensities (1 - exp(-k dt), framerate independent)
+  const a = 1 - Math.exp(-7 * dt);
   for (let i = 0; i < lightPool.length; i++) {
-    const L = lightPool[i], s = scored[i];
-    if (!s) { L.intensity = 0; continue; }
-    const l = s[1]; L.position.set(l.x, l.y, l.z); L.color.copy(l.color); L.intensity = l.intensity; L.distance = l.distance;
+    const S = _poolSlot[i], L = lightPool[i]; if (!S || !S.l) { L.intensity = 0; continue; }
+    S.k += ((S.keep ? 1 : 0) - S.k) * a; if (!S.keep && S.k < 0.003) { S.l = null; L.intensity = 0; continue; }
+    L.color.copy(S.l.color); L.intensity = S.l.intensity * S.k;
   }
 }
 
@@ -932,7 +978,7 @@ function startEnding() {
 
 // ------------------------------------------------------------ loop
 const clock = new THREE.Clock();
-const _v0 = new THREE.Vector3();
+const _v0 = new THREE.Vector3(), _v1 = new THREE.Vector3();
 let lightT = 0, t = 0;
 // ?qa=1: fixed 1/30 s per frame so slow software-GL screenshots are deterministic; advance() steps the sim without rendering
 const QA_FIXED = !!params.get('qa');
@@ -940,9 +986,26 @@ let simOnly = false;
 // dynamic resolution: frame-time EMA -> render scale (auto quality only, never in QA); the feature governor
 // only kicks in once the scale is already at its floor
 const dyn = { ema: 1000 / 60, acc: 0, good: 0, bad: 0, last: -99, on: PERF.dynamicResolution && Q.auto && !QA_FIXED_EARLY };
+// explicit MEDIUM / HIGH safety net: if the frame rate stays under ~40 fps for 3 s, quietly step down the bloom
+// resolution, then the render scale (never shadows / lights / materials - the art style stays); steps back up after
+// 10 s comfortably above target. Off in QA, on LOW and under ?nosafety=1.
+const SAFE = { on: !Q.auto && Q.name !== 'low' && !QA_FIXED_EARLY && params.get('nosafety') !== '1', bad: 0, good: 0, acc: 0, level: 0, steps: [] };
+const SAFE_STEPS = [
+  { name: 'bloom res 0.5', on: () => post.setBloomScale?.(0.5), off: () => post.setBloomScale?.(Q.bloomScale || 1) },
+  { name: 'render scale 0.85', on: () => { dynScale = 0.85; applySize(); }, off: () => { dynScale = 1; applySize(); } },
+  { name: 'render scale 0.72', on: () => { dynScale = 0.72; applySize(); }, off: () => { dynScale = 0.85; applySize(); } },
+];
+function safetyNet(d, ema) {
+  if (!SAFE.on || (G.state !== 'playing' && G.state !== 'title')) { SAFE.bad = SAFE.good = 0; return; }
+  SAFE.acc += d; if (SAFE.acc < 0.5) return; SAFE.acc = 0;
+  if (1000 / ema < 40) { SAFE.good = 0; if (++SAFE.bad >= 6 && SAFE.level < SAFE_STEPS.length) { const s = SAFE_STEPS[SAFE.level++]; s.on(); SAFE.steps.push(s.name); SAFE.bad = 0; console.info('[perf] safety net -> ' + s.name); } }
+  else if (1000 / ema > 58) { SAFE.bad = 0; if (++SAFE.good >= 20 && SAFE.level > 0) { const s = SAFE_STEPS[--SAFE.level]; s.off(); SAFE.steps.push('undo ' + s.name); SAFE.good = 0; console.info('[perf] safety net <- ' + s.name); } }
+  else { SAFE.bad = 0; SAFE.good = 0; }
+}
 function perfCtl(d) {
   const ms = d * 1000; if (ms <= 0 || ms > 250) return;
   dyn.ema += (ms - dyn.ema) * 0.08; dyn.acc += d;
+  safetyNet(d, dyn.ema);
   if (!dyn.on || dyn.acc < 1) return; dyn.acc = 0;
   // hysteresis: a resize re-allocates every render target (a hitch by itself), so only step after 2 bad / 6 good
   // seconds in a row, never more than once per 4 s, with a wide dead band (0.75x..1.15x of the frame budget)
@@ -1039,9 +1102,9 @@ function frame(dt) {
   for (const tg of G.targets) if (tg.label) { tg.label.position.y = tg.label.userData.baseY + Math.sin(t * 2 + tg.b.id) * 0.15; }
   if (shardOrbit.visible) shardOrbit.children.forEach(m => { const a = m.userData.a + t * 4; m.position.set(Math.cos(a) * 0.55, Math.sin(a * 2 + m.userData.tilt) * 0.25, Math.sin(a) * 0.55); m.rotation.y = a * 2; });
   // lights / shadow follow
-  lightT -= dt; if (lightT <= 0) { lightT = 0.12; updateLightPool(); }
+  lightT -= dt; if (lightT <= 0) { lightT = 0.12; updateLightPool(); } fadeLightPool(dt);
   const focus = G.state === 'playing' || G.state === 'paused' || G.state === 'levelComplete' || G.state === 'gameOver' ? player.pos : _ORIGIN;
-  moon.position.set(focus.x + 35, 70, focus.z + 22); moon.target.position.copy(focus);
+  updateShadow(focus);
   snow.update(t, _v0.set(camera.position.x, 0, camera.position.z), G.storm, G.weather);
   if (G.state !== 'title' && G.state !== 'ending') {
     const S = { score: G.score, delivered: G.delivered, total: G.total, timer: G.timer, level: G.level, levelName: CONFIG.levels[G.level].name, mump: G.mumpLeft > 0, mumpLeft: G.mumpLeft, mumpDur: G.mumpDur, inRange: G.inRange || 0, powerupsLeft: G.powerups.filter(p => p.active).length, storm: G.storm, hint: G.hint, bonusFlash: G.bonusFlash };
@@ -1078,10 +1141,10 @@ function debugAPI() {
   return {
     G, player, CONFIG, renderer, world, santa, scene, camera, post, get hud() { return hud; }, get nav() { return nav; },
     get state() { return G.state; },
-    resolveWindows: async (rects) => { const { resolveWindows } = await import('./interiors.js?v=4c34af6b'); const out = {}; for (const b of world.buildings) { if (!b.isGLB || out[b.type] || !rects[b.type]) continue; out[b.type] = resolveWindows(b.holder.children[0], b.holder, rects[b.type]); } return out; },
-    facadeShots: async (side = 0, mask = false) => { const { facadeShot } = await import('./interiors.js?v=4c34af6b'); const out = {}; for (const b of world.buildings) { if (!b.isGLB || out[b.type]) continue; out[b.type] = facadeShot(b.holder.children[0], b.holder, renderer, side, 48, mask); } return out; },
+    resolveWindows: async (rects) => { const { resolveWindows } = await import('./interiors.js?v=8fa77074'); const out = {}; for (const b of world.buildings) { if (!b.isGLB || out[b.type] || !rects[b.type]) continue; out[b.type] = resolveWindows(b.holder.children[0], b.holder, rects[b.type]); } return out; },
+    facadeShots: async (side = 0, mask = false) => { const { facadeShot } = await import('./interiors.js?v=8fa77074'); const out = {}; for (const b of world.buildings) { if (!b.isGLB || out[b.type]) continue; out[b.type] = facadeShot(b.holder.children[0], b.holder, renderer, side, 48, mask); } return out; },
     // dev: detect lit window rects on each Tripo building type (output -> assets/windows.js)
-    detectWindows: async () => { const { detectWindows } = await import('./interiors.js?v=4c34af6b'); const out = {}; for (const b of world.buildings) { if (!b.isGLB || out[b.type]) continue; const o = b.holder.children[0]; out[b.type] = detectWindows(o, b.holder, renderer); } return out; },
+    detectWindows: async () => { const { detectWindows } = await import('./interiors.js?v=8fa77074'); const out = {}; for (const b of world.buildings) { if (!b.isGLB || out[b.type]) continue; const o = b.holder.children[0]; out[b.type] = detectWindows(o, b.holder, renderer); } return out; },
     start: (lv = 0) => { G.qaMute = true; initAudio(false); startLevel(lv); },
     input, player, G,
     completeLevel: () => { for (const tg of G.targets) deliver(tg); },
@@ -1104,6 +1167,7 @@ function debugAPI() {
     audio: () => audioStatus(),
     audioOffline: (sec = 20, legacy = false, rate = 2.2) => renderEndingOffline(sec, legacy, rate),
     nanView: on => { post.nanView(on); return !!post.sanitize; },
+    safety: () => ({ on: SAFE.on, level: SAFE.level, steps: SAFE.steps, dynScale, pixelRatio: renderer.getPixelRatio() }),
     fx: () => ({ blackProbe: BP.steps, quality: Q, governor: governor.applied, chimneys: world.buildings.filter(b => b.chimney).length, lamps: fxs.cones?.lamps.length || 0, env: !!scene.environment }),
     santaPos: () => player.pos.toArray(),
     camYaw: (y) => { if (y !== undefined) { cam.yaw = y; input.lastManualCam = performance.now(); } return { yaw: cam.yaw, dist: +cam.dist.toFixed(2), h: +(cam.h ?? 0).toFixed(2), pos: camera.position.toArray().map(v => +v.toFixed(2)), fov: +camera.fov.toFixed(1), near: camera.near }; },

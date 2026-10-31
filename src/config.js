@@ -203,10 +203,10 @@ export const CONFIG = {
               shafts: false, smoke: false, footprints: true, sparkle: false, snowLayers: 1, snowCount: 600, forestScale: 0.4, lights: 0,  antialias: false,
               far: 64, fogMin: 0.026, cullRadius: 40, lodDistance: 24, chunkCell: 80, propRadius: 34 },
     medium: { pixelRatio: 1.25, shadows: true,  shadowMapSize: 2048, bloom: true, bloomScale: 0.75, msaa: 2, ao: false, dof: false, grade: true, env: true,
-              shafts: true,  smoke: true,  footprints: true, sparkle: true,  snowLayers: 2, snowCount: 2500, forestScale: 0.8,  lights: 8,  antialias: false },
+              shafts: true,  smoke: true,  footprints: true, sparkle: true,  snowLayers: 2, snowCount: 2500, forestScale: 0.8,  lights: 4,  antialias: false },
     // high = smooth 60 fps on an Apple M-series laptop: 1.5x render scale cap, 2K tight shadows, GTAO + DOF only in cutscenes
     high:   { pixelRatio: 1.5,  shadows: true,  shadowMapSize: 2048, bloom: true, bloomScale: 0.75, msaa: 4, ao: 'cinematic', dof: 'cinematic', grade: true, env: true,
-              shafts: true,  smoke: true,  footprints: true, sparkle: true,  snowLayers: 3, snowCount: 3500, forestScale: 1.0,  lights: 8,  antialias: false },
+              shafts: true,  smoke: true,  footprints: true, sparkle: true,  snowLayers: 3, snowCount: 3500, forestScale: 1.0,  lights: 5,  antialias: false },
     // ultra = beauty / screenshot preset (the old 'high'): 2x scale, 4K shadows, GTAO + DOF always on
     ultra:  { pixelRatio: 2.0,  shadows: true,  shadowMapSize: 4096, bloom: true, bloomScale: 1.0, msaa: 4, ao: true,  dof: true,  grade: true, env: true,
               shafts: true,  smoke: true,  footprints: true, sparkle: true,  snowLayers: 3, snowCount: 5000, forestScale: 1.0,  lights: 12, antialias: false },
@@ -231,6 +231,7 @@ export const CONFIG = {
     ios: { maxPixelRatio: 1.0, maxPixels: 1.3e6, msaa: 0, shadowMapSize: 512, bloomScale: 0.4 }, // iPhone/iPad Safari: lighter still (tile GPU memory, thermal throttling, jetsam kills)
     mobile: { maxPixelRatio: 1.5, ao: false, dof: false, msaa: 2, shadowMapSize: 1024 }, // always applied on touch devices
     shadowFrustum: 28,          // half-size (m) of the moon shadow box around the player
+    viewCull: true, viewCullNear: 40, // MEDIUM/HIGH: whole-map instanced props kept within 40 m (shadow box) or inside the view cone
     pineNearRange: 58,          // m: full needle-card pines inside, impostor cards beyond
     decoRange: 70,              // m: decorations / bulbs drawn within this range of the camera
     lampRange: 110,

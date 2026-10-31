@@ -3,13 +3,13 @@
 // and a runtime performance governor for weak devices.
 import * as THREE from 'three';
 import { EffectComposer } from 'three/addons/postprocessing/EffectComposer.js';
-import { RenderPass } from 'three/addons/postprocessing/RenderPass.js';
+import { Pass } from 'three/addons/postprocessing/Pass.js';
 import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js';
 import { OutputPass } from 'three/addons/postprocessing/OutputPass.js';
 import { ShaderPass } from 'three/addons/postprocessing/ShaderPass.js';
 import { GTAOPass } from 'three/addons/postprocessing/GTAOPass.js';
 import { RGBELoader } from 'three/addons/loaders/RGBELoader.js';
-import { canvasTexture, glowTexture } from './util.js?v=4c34af6b';
+import { canvasTexture, glowTexture } from './util.js?v=8fa77074';
 
 // ------------------------------------------------------------- environment
 export async function loadEnvironment(renderer, scene, url, intensity) {
@@ -108,6 +108,25 @@ const FinalShader = {
     }`,
 };
 
+// Scene render + first NaN sanitize in one pass. Only the scene target is multisampled: the composer's ping-pong
+// targets stay single-sample, so bloom / output / grade passes never write (and resolve) 4x MSAA half-float buffers.
+class SceneSanitizePass extends Pass {
+  constructor(scene, camera, sanitize, type, samples) {
+    super(); this.scene = scene; this.camera = camera; this.sanitize = sanitize; this.needsSwap = true;
+    this.rt = new THREE.WebGLRenderTarget(1, 1, { type, samples });
+    this.rt.texture.name = 'SceneMSAA';
+  }
+  setSize(w, h) { this.rt.setSize(w, h); }
+  render(renderer, writeBuffer, readBuffer, deltaTime, maskActive) {
+    const ac = renderer.autoClear; renderer.autoClear = false;
+    renderer.setRenderTarget(this.rt); renderer.clear(); renderer.render(this.scene, this.camera);
+    renderer.autoClear = ac;
+    this.sanitize.renderToScreen = this.renderToScreen;
+    this.sanitize.render(renderer, writeBuffer, this.rt, deltaTime, maskActive); // tDiffuse <- resolved scene
+  }
+  dispose() { this.rt.dispose(); }
+}
+
 export class PostFX {
   constructor(renderer, scene, camera, Q, bloomCfg, look) {
     this.renderer = renderer; this.scene = scene; this.camera = camera; this.Q = Q; this.look = look;
@@ -118,10 +137,13 @@ export class PostFX {
     const ext = renderer.extensions, half = ext.has('EXT_color_buffer_half_float') || ext.has('EXT_color_buffer_float');
     const maxS = renderer.capabilities.maxSamples || 0;
     this.halfFloat = half;
-    const rt = new THREE.WebGLRenderTarget(size.x, size.y, { type: half ? THREE.HalfFloatType : THREE.UnsignedByteType, samples: Math.min(Q.msaa || 0, maxS) });
+    const type = half ? THREE.HalfFloatType : THREE.UnsignedByteType;
+    this.samples = Math.min(Q.msaa || 0, maxS);
+    // post ping-pong targets: single-sample, no depth (every pass after the scene is a full-screen quad)
+    const rt = new THREE.WebGLRenderTarget(size.x, size.y, { type, samples: 0, depthBuffer: false });
     const composer = this.composer = new EffectComposer(renderer, rt);
-    composer.addPass(new RenderPass(scene, camera));
-    this.sanitize = new ShaderPass(SanitizeShader); composer.addPass(this.sanitize);
+    this.sanitize = new ShaderPass(SanitizeShader);
+    this.scenePass = new SceneSanitizePass(scene, camera, this.sanitize, type, this.samples); composer.addPass(this.scenePass);
     if (Q.ao) {
       const ao = this.ao = new GTAOPass(scene, camera, size.x, size.y);
       ao.output = GTAOPass.OUTPUT.Default; ao.blendIntensity = 0.9;
@@ -160,7 +182,8 @@ export class PostFX {
     if (!this.enabled) return;
     this.composer.setPixelRatio(this.renderer.getPixelRatio());
     this.composer.setSize(w, h);
-    if (this.bloom && this.Q.bloomScale && this.Q.bloomScale < 1) this.bloom.setSize(w * this.renderer.getPixelRatio() * this.Q.bloomScale, h * this.renderer.getPixelRatio() * this.Q.bloomScale);
+    this._w = w; this._h = h; const bs = this.bloomScaleNow ?? this.Q.bloomScale;
+    if (this.bloom && bs && bs < 1) this.bloom.setSize(w * this.renderer.getPixelRatio() * bs, h * this.renderer.getPixelRatio() * bs);
     this.final?.uniforms.uRes.value.set(w * this.renderer.getPixelRatio(), h * this.renderer.getPixelRatio());
     for (const p of [this.sanitize, this.sanitize2, this.sanitize3]) p?.uniforms.uTexel.value.set(1 / Math.max(1, w * this.renderer.getPixelRatio()), 1 / Math.max(1, h * this.renderer.getPixelRatio()));
   }
@@ -179,6 +202,8 @@ export class PostFX {
   setAO(on) { if (this.ao) { this.ao.enabled = on; this._aoOff = !on; if (!on) this.setDof(false); } }
   /** debug: magenta where the scene buffer holds NaN/Inf (bloom + grade bypassed so it stays pixel-exact) */
   nanView(on) { if (!this.sanitize) return; this.sanitize.uniforms.uDebug.value = on ? 1 : 0; if (this.bloom) this.bloom.enabled = !on && !this._bloomOff; if (this.final) this.final.enabled = !on; }
+  /** safety net: bloom mip-chain resolution (fraction of the drawing buffer); glow strength / radius unchanged */
+  setBloomScale(k) { if (!this.bloom) return; this.bloomScaleNow = k; if (this._w) this.setSize(this._w, this._h); }
   setBloom(on) { this._bloomOff = !on; if (this.bloom) this.bloom.enabled = on; }
   /** weather-driven post (CONFIG.weather.post): crisp clear nights, softer glow + more depth haze in a storm */
   setWeather(storm) {
