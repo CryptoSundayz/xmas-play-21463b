@@ -247,7 +247,8 @@ export const sfx = {
     if (!dense) osc('sine', 900, Math.max(now(), t - 0.9), 0.8, 0.015 * v, sfxBus, { slide: 2400, a: 0.03 });
     noise(t, 0.8, 0.22 * v, sfxBus, { type: 'lowpass', f: 900, f2: 120, a: 0.008 });
     osc('sine', 70, t, 0.6, 0.16 * v, sfxBus, { slide: 35, a: 0.01 });
-    if (crackBuf && voiceOK(sfxBus, t + 0.2)) { // one source for the whole crackle tail
+    // crackle tail removed: its 2-4 kHz pops read as "gresek" static on device speakers (Daniel 2026-10-31)
+    if (false && crackBuf && voiceOK(sfxBus, t + 0.2)) { // one source for the whole crackle tail
       const s = ctx.createBufferSource(), g = ctx.createGain(); s.buffer = crackBuf; s.playbackRate.value = 0.9 + Math.random() * 0.2;
       g.gain.setValueAtTime(0.0001, t + 0.2); g.gain.linearRampToValueAtTime(0.5 * v, t + 0.22); g.gain.setTargetAtTime(0.0001, t + 1.1, 0.12);
       s.connect(g); g.connect(sfxBus); s.start(t + 0.2); s.stop(t + 1.6); track(t + 1.6, sfxBus);
