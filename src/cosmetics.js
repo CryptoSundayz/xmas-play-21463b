@@ -1,7 +1,7 @@
 // Wardrobe catalog: 40 cosmetic items in 8 slots, unlocked by stars / stage clears / lifetime stats (progress.js).
 // All looks are procedural (shader recolours of the mascot + small procedural meshes / particle trails) - no new assets.
 // Persistence lives in progress.data: unlockedItems (ids, for "new unlock" toasts), equipped {slot: id}, seenItems.
-import { progress } from './progress.js?v=5361c3f3';
+import { progress } from './progress.js?v=9dded00c';
 
 export const SLOTS = [
   { id: 'hat', name: 'Hat', icon: '🎅' }, { id: 'topper', name: 'Topper', icon: '👑' }, { id: 'suit', name: 'Suit', icon: '🧥' },
