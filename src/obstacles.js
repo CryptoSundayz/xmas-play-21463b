@@ -4,10 +4,10 @@
 // is built; Obstacles builds light meshes (merged / instanced: 1-2 draw calls per obstacle type) and runs them.
 import * as THREE from 'three';
 import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
-import { CONFIG, difficulty } from './config.js?v=3c3cf266';
-import { rng, lerp, clamp, textTexture, glowTexture } from './util.js?v=3c3cf266';
-import { MANIFEST, bakedMeshes } from './assets.js?v=3c3cf266';
-import { planRoute } from './routegraph.js?v=3c3cf266';
+import { CONFIG, difficulty } from './config.js?v=77728b1a';
+import { rng, lerp, clamp, textTexture, glowTexture } from './util.js?v=77728b1a';
+import { MANIFEST, bakedMeshes } from './assets.js?v=77728b1a';
+import { planRoute } from './routegraph.js?v=77728b1a';
 
 const TAU = Math.PI * 2;
 const hyp = Math.hypot;

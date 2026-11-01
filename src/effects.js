@@ -1,8 +1,8 @@
 // Snow, gift flights (gossip), mump2p light shards + trails, particle bursts, fireworks (Optimum logo).
 import * as THREE from 'three';
-import { glowTexture } from './util.js?v=3c3cf266';
-import { logoPoints } from './logo.js?v=3c3cf266';
-import { giftBox } from './props.js?v=3c3cf266';
+import { glowTexture } from './util.js?v=77728b1a';
+import { logoPoints } from './logo.js?v=77728b1a';
+import { giftBox } from './props.js?v=77728b1a';
 
 // ------------------------------------------------------------------ snow
 export class Snow {

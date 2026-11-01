@@ -9,7 +9,7 @@ import { OutputPass } from 'three/addons/postprocessing/OutputPass.js';
 import { ShaderPass } from 'three/addons/postprocessing/ShaderPass.js';
 import { GTAOPass } from 'three/addons/postprocessing/GTAOPass.js';
 import { RGBELoader } from 'three/addons/loaders/RGBELoader.js';
-import { canvasTexture, glowTexture } from './util.js?v=3c3cf266';
+import { canvasTexture, glowTexture } from './util.js?v=77728b1a';
 
 // ------------------------------------------------------------- environment
 export async function loadEnvironment(renderer, scene, url, intensity) {
@@ -204,6 +204,11 @@ export class PostFX {
   nanView(on) { if (!this.sanitize) return; this.sanitize.uniforms.uDebug.value = on ? 1 : 0; if (this.bloom) this.bloom.enabled = !on && !this._bloomOff; if (this.final) this.final.enabled = !on; }
   /** safety net: bloom mip-chain resolution (fraction of the drawing buffer); glow strength / radius unchanged */
   setBloomScale(k) { if (!this.bloom) return; this.bloomScaleNow = k; if (this._w) this.setSize(this._w, this._h); }
+  /** perf tier: MSAA sample count of the scene target (0 = off); the target is re-allocated on its next use */
+  setSamples(n) {
+    if (!this.enabled) return; n = Math.min(n, this.renderer.capabilities.maxSamples || 0);
+    const rt = this.scenePass.rt; if (rt.samples === n) return; rt.samples = n; this.samples = n; rt.dispose();
+  }
   setBloom(on) { this._bloomOff = !on; if (this.bloom) this.bloom.enabled = on; }
   /** weather-driven post (CONFIG.weather.post): crisp clear nights, softer glow + more depth haze in a storm */
   setWeather(storm) {

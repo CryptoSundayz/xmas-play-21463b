@@ -1,20 +1,20 @@
 // Village generation: ground, sky, roads, square, lake, buildings, lamps, forest, colliders, light pool.
 import * as THREE from 'three';
 import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
-import { CONFIG } from './config.js?v=3c3cf266';
-import { rng, worldUV, glowTexture, textTexture } from './util.js?v=3c3cf266';
-import { materials, windowMaterial, WINDOW_WARM, cloneTex } from './materials.js?v=3c3cf266';
-import { buildProcedural, BUILDING_WEIGHTS } from './buildings.js?v=3c3cf266';
-import { pineGeometry, lampGeometries, christmasTree, snowman, bench, giftPile, sleigh, reindeer } from './props.js?v=3c3cf266';
-import { MANIFEST, instantiate, bakedMeshes, addTextureGlow } from './assets.js?v=3c3cf266';
-import { makeLogoMesh } from './logo.js?v=3c3cf266';
-import { findChimney } from './fx.js?v=3c3cf266';
-import { WINDOWS, DOORS, SIGNS } from '../assets/windows.js?v=3c3cf266';
-import { SurfaceBVH, SurfaceField, rayGap } from './attach.js?v=3c3cf266';
-import { buildShopSign } from './signs.js?v=3c3cf266';
+import { CONFIG } from './config.js?v=77728b1a';
+import { rng, worldUV, glowTexture, textTexture } from './util.js?v=77728b1a';
+import { materials, windowMaterial, WINDOW_WARM, cloneTex } from './materials.js?v=77728b1a';
+import { buildProcedural, BUILDING_WEIGHTS } from './buildings.js?v=77728b1a';
+import { pineGeometry, lampGeometries, christmasTree, snowman, bench, giftPile, sleigh, reindeer } from './props.js?v=77728b1a';
+import { MANIFEST, instantiate, bakedMeshes, addTextureGlow } from './assets.js?v=77728b1a';
+import { makeLogoMesh } from './logo.js?v=77728b1a';
+import { findChimney } from './fx.js?v=77728b1a';
+import { WINDOWS, DOORS, SIGNS } from '../assets/windows.js?v=77728b1a';
+import { SurfaceBVH, SurfaceField, rayGap } from './attach.js?v=77728b1a';
+import { buildShopSign } from './signs.js?v=77728b1a';
 const attachCache = new Map(), lightCache = new Map();
-import { smoothIco, snowBlend, snowSparkle, snowmanVariant, houseDecor, fenceGarland, fbm, hash2, attachedWreath, attachedGarland } from './xmasdeco.js?v=3c3cf266';
-import { buildTerrain, conformDecals, makeTracks } from './terrain.js?v=3c3cf266';
+import { smoothIco, snowBlend, snowSparkle, snowmanVariant, houseDecor, fenceGarland, fbm, hash2, attachedWreath, attachedGarland } from './xmasdeco.js?v=77728b1a';
+import { buildTerrain, conformDecals, makeTracks } from './terrain.js?v=77728b1a';
 const chimneyCache = new Map();
 const eaveCache = new Map();
 const NO_STRING_LIGHTS = new Set(['windmill', 'church']);
@@ -842,7 +842,7 @@ export class World {
     const bx = (arr, w, h, d, x, y, z) => { const g = new THREE.BoxGeometry(w, h, d); g.translate(x, y, z); arr.push(g); };
     // lumpy snow: a squashed, noise-displaced blob
     const blob = (w, h, d, x, y, z, seed) => {
-      const g = smoothIco(1, Math.max(w, d) < 0.15 ? 1 : 2); // tiny cap blobs (7-11 cm): detail 1 reads the same, 4x fewer tris
+      const g = smoothIco(1, Math.max(w, d) < 0.15 ? 0 : 2); // tiny cap blobs (7-11 cm, 11 per fence x ~190 fences): detail 0 (20 tris) reads the same at play distance
       const pa = g.attributes.position;
       for (let i = 0; i < pa.count; i++) {
         const vx = pa.getX(i), vy = pa.getY(i), vz = pa.getZ(i);

@@ -1,28 +1,28 @@
 // Santa's Block Delivery — game bootstrap, loop and state machine.
 import * as THREE from 'three';
-import { PostFX, loadEnvironment, LampCones, Footprints, SnowPuffs, ChimneySmoke, Sparkles, Shockwaves, Governor } from './fx.js?v=3c3cf266';
-import { CONFIG, applyUrlOverrides, resolveQuality, difficulty, ethPerBlock, formatEth, comboMult, fmt } from './config.js?v=3c3cf266';
-import { initAssets } from './assets.js?v=3c3cf266';
-import { World } from './world.js?v=3c3cf266';
-import { Interiors } from './interiors.js?v=3c3cf266';
-import { PineSystem } from './pines.js?v=3c3cf266';
-import { createSanta } from './santa.js?v=3c3cf266';
-import { Input } from './input.js?v=3c3cf266';
-import { HUD } from './hud.js?v=3c3cf266';
-import { Snow, Particles, Flights, Fireworks } from './effects.js?v=3c3cf266';
-import { makeLogoMesh, logoSVG } from './logo.js?v=3c3cf266';
-import { WINDOW_WARM, WINDOW_BLUE } from './materials.js?v=3c3cf266';
-import { InstanceCuller } from './lowcull.js?v=3c3cf266';
-import { DynRes } from './dynres.js?v=3c3cf266';
-import { initAudio, resumeAudio, sfx, music, audioState, configureAudio, audioStatus, renderEndingOffline } from './audio.js?v=3c3cf266';
-import { progress, starsFor, titleFor } from './progress.js?v=3c3cf266';
-import { drawScoreCard, showCardUI, hideCardUI } from './scorecard.js?v=3c3cf266';
-import { cosmetics, SLOTS, ITEMS, BY_ID } from './cosmetics.js?v=3c3cf266';
-import { applyLook, Trail } from './costume.js?v=3c3cf266';
-import { createLeaderboard, NAME_MAX } from './leaderboard.js?v=3c3cf266';
-import { Obstacles, planStage, routeCheck } from './obstacles.js?v=3c3cf266';
-import { RouteGraph } from './routegraph.js?v=3c3cf266';
-import { rng, clamp, lerp, damp, angleDamp, angleDiff, glowTexture, textTexture, worldUV } from './util.js?v=3c3cf266';
+import { PostFX, loadEnvironment, LampCones, Footprints, SnowPuffs, ChimneySmoke, Sparkles, Shockwaves, Governor } from './fx.js?v=77728b1a';
+import { CONFIG, applyUrlOverrides, resolveQuality, difficulty, ethPerBlock, formatEth, comboMult, fmt } from './config.js?v=77728b1a';
+import { initAssets } from './assets.js?v=77728b1a';
+import { World } from './world.js?v=77728b1a';
+import { Interiors } from './interiors.js?v=77728b1a';
+import { PineSystem } from './pines.js?v=77728b1a';
+import { createSanta } from './santa.js?v=77728b1a';
+import { Input } from './input.js?v=77728b1a';
+import { HUD } from './hud.js?v=77728b1a';
+import { Snow, Particles, Flights, Fireworks } from './effects.js?v=77728b1a';
+import { makeLogoMesh, logoSVG } from './logo.js?v=77728b1a';
+import { WINDOW_WARM, WINDOW_BLUE } from './materials.js?v=77728b1a';
+import { InstanceCuller } from './lowcull.js?v=77728b1a';
+import { DynRes } from './dynres.js?v=77728b1a';
+import { initAudio, resumeAudio, sfx, music, audioState, configureAudio, audioStatus, renderEndingOffline } from './audio.js?v=77728b1a';
+import { progress, starsFor, titleFor } from './progress.js?v=77728b1a';
+import { drawScoreCard, showCardUI, hideCardUI } from './scorecard.js?v=77728b1a';
+import { cosmetics, SLOTS, ITEMS, BY_ID } from './cosmetics.js?v=77728b1a';
+import { applyLook, Trail } from './costume.js?v=77728b1a';
+import { createLeaderboard, NAME_MAX } from './leaderboard.js?v=77728b1a';
+import { Obstacles, planStage, routeCheck } from './obstacles.js?v=77728b1a';
+import { RouteGraph } from './routegraph.js?v=77728b1a';
+import { rng, clamp, lerp, damp, angleDamp, angleDiff, glowTexture, textTexture, worldUV } from './util.js?v=77728b1a';
 
 applyUrlOverrides();
 const params = new URLSearchParams(location.search);
@@ -88,6 +88,8 @@ const camera = new THREE.PerspectiveCamera(CONFIG.camera.fov, innerWidth / inner
 // moonlight
 const hemi = new THREE.HemisphereLight(0x4a66b8, 0x2a2232, 0.66); scene.add(hemi);
 const moon = new THREE.DirectionalLight(0x9ab6ff, 0.9);
+// perf tier state + overlay timings (see the perf tiers by the loop)
+const PT = { shadowEvery: 1, shadowRefresh: 0, cpuUpdate: 0, cpuRender: 0, t0: 0 };
 moon.castShadow = Q.shadows; moon.shadow.mapSize.set(Q.shadowMapSize, Q.shadowMapSize);
 { const S = CONFIG.performance.shadowFrustum; Object.assign(moon.shadow.camera, { left: -S, right: S, top: S, bottom: -S, near: 1, far: 160 }); }
 moon.shadow.bias = -0.0004; moon.shadow.normalBias = 0.035; moon.shadow.radius = Q.shadowMapSize >= 4096 ? 4 : 3; moon.shadow.blurSamples = 16;
@@ -189,7 +191,7 @@ const G = {
   gossipBusy: false, hint: '', endingT: 0, lastTick: 0, levelObjects: [],
   combo: 0, bestCombo: 0, lastDeliverT: -1e9, boosted: 0, totalBoosted: 0,
 };
-import { Nav } from './nav.js?v=3c3cf266';
+import { Nav } from './nav.js?v=77728b1a';
 const _dbs = new THREE.Vector2();
 const player = { pos: new THREE.Vector3(), vel: new THREE.Vector3(), heading: 0, speed: 0, jy: 0, vy: 0, air: false, coyote: 0, jumpBuf: 0, sprintK: 0, holdT: 0, surfY: 0, paved: false };
 const cam = { yaw: 0, pos: new THREE.Vector3(), look: new THREE.Vector3(), dist: CONFIG.camera.distance };
@@ -1192,7 +1194,17 @@ function updateShadow(focus) {
   const moved = fx !== _sh.x || fz !== _sh.z; _sh.x = fx; _sh.z = fz;
   const st = G.state, live = st === 'playing' || st === 'title' || st === 'intro' || st === 'ending';
   const moving = st === 'playing' && (player.speed > 0.05 || player.air) || st === 'intro' || st === 'ending' || walkersNear(fx, fz, S + 6);
-  if (moved || moving || (live && ++_sh.n % 3 === 0)) renderer.shadowMap.needsUpdate = true;
+  // perf tier 'shadow refresh 1/2': a moving scene refreshes the map every 2nd rendered frame (the shadow matrix is
+  // only updated together with the map, so a skipped frame shows last frame's shadows, never misaligned ones)
+  _sh.f = (_sh.f || 0) + 1;
+  if (moved || moving || (live && ++_sh.n % 3 === 0)) { if (PT.shadowEvery <= 1 || _sh.f % PT.shadowEvery === 0) renderer.shadowMap.needsUpdate = true; }
+  if (renderer.shadowMap.needsUpdate) PT.shadowRefresh++;
+}
+// light-space shadow box for the InstanceCuller (shadow pass draws only the instances inside it)
+const _shInfo = { c: null, u: _sh.u, v: _sh.v, half: 0 };
+function shadowInfo() {
+  if (!moon.castShadow || !renderer.shadowMap.enabled || _sh.x > 1e8) return null;
+  _shInfo.c = moon.target.position; _shInfo.half = CONFIG.performance.shadowFrustum; return _shInfo;
 }
 function walkersNear(x, z, r) {
   for (const w of world.walkers || []) { const o = w.rd?.group; if (!o || w.idle) continue; const p = o.position; if ((p.x - x) ** 2 + (p.z - z) ** 2 < r * r) return true; }
@@ -1343,7 +1355,7 @@ function capturePortrait() {
     camera.fov = THREE.MathUtils.radToDeg(2 * Math.atan(Math.tan(THREE.MathUtils.degToRad(15)) / fr)); camera.updateProjectionMatrix(); camera.lookAt(base.x, base.y + 0.95, base.z); camera.updateMatrixWorld();
     const hv = giftHalo.visible, h0 = hemi.intensity; giftHalo.visible = false; hemi.intensity = Math.max(h0, 1.25); // portrait fill (no extra light = no shader recompile)
     post.update(t, { focus: camera.position.distanceTo(base), boost: 0, flash: 0, storm: G.storm });
-    culler?.update(1, camera); post.render();
+    culler?.update(1, camera, shadowInfo()); post.render();
     const ch = Math.round(H0 * fr), cw = Math.min(W0, Math.round(ch * A)), s = Math.min(1, 640 / ch);
     const c = document.createElement('canvas'); c.width = Math.round(cw * s); c.height = Math.round(ch * s);
     c.getContext('2d').drawImage(el, (W0 - cw) / 2, (H0 - ch) / 2, cw, ch, 0, 0, c.width, c.height);
@@ -1396,24 +1408,57 @@ let simOnly = false;
 const dyn = { ema: 1000 / 60, on: PERF.dynamicResolution && !QA_FIXED_EARLY && params.get('dynres') !== '0' };
 const dynres = new DynRes({ min: PERF.minScale, max: PERF.maxScale, step: 0.05, target: PERF.targetFps,
   apply: s => { dynScale = s; applySize(); }, log: m => console.info(m) });
-// explicit MEDIUM / HIGH safety net, layered on top: only once dynamic resolution sits at its floor and the frame rate
-// still stays under ~40 fps for 3 s, step down the bloom resolution, then let the scale floor drop to 0.5 (never
-// shadows / lights / materials - the art style stays); steps back up after 10 s comfortably above target.
-// The thresholds are relative to the dynres cap, so a 30 Hz-capped Safari (Low Power Mode) does not trip it.
-// Off in QA, on LOW and under ?nosafety=1. (auto quality uses the feature governor instead.)
-const SAFE = { on: !Q.auto && Q.name !== 'low' && !QA_FIXED_EARLY && params.get('nosafety') !== '1', bad: 0, good: 0, acc: 0, level: 0, steps: [] };
+// Perf tiers (MEDIUM / HIGH), layered on top of dynamic resolution. Lowering the resolution only helps a fill-bound
+// GPU; a device that is vertex / draw-call / CPU bound (e.g. Apple A18 Pro Safari: ~20 fps at 0.7 MP and render scale
+// 0.58) makes dynres give up (restore + cap). Then - or once dynres sits at its floor - and the frame rate stays under
+// 75% of the target for 3 s, the next costly feature tier is stepped down. Every tier is an experiment: if the frame
+// rate did not improve by >= 4% within 3 s it is undone and skipped (a 30 Hz rAF cap, Low Power Mode, a background tab
+// never loses quality for nothing). Tiers step back up (last first) after 10 s at >= 97% of the target; a tier that has
+// to come back within 30 s of an undo holds for 60 s before the next undo. Materials, lights and the art style stay.
+// Off in QA, on LOW, under ?nosafety=1 and ?dynres=0 (fixed measurements). (auto quality uses the feature governor.)
+const SAFE = { on: !Q.auto && Q.name !== 'low' && !QA_FIXED_EARLY && params.get('nosafety') !== '1' && params.get('dynres') !== '0',
+  bad: 0, good: 0, acc: 0, level: 0, steps: [], active: [], skip: new Set(), trial: null, hold: 10, undoneAt: -1e9, clock: 0 };
 const SAFE_STEPS = [
-  { name: 'bloom res 0.35', on: () => post.setBloomScale?.(0.35), off: () => post.setBloomScale?.(Q.bloomScale || 1) },
-  { name: 'render scale floor 0.5', on: () => { dynres.min = 0.5; }, off: () => { dynres.min = PERF.minScale; if (dynres.scale < dynres.min) dynres._set(dynres.min, 'safety undo'); } },
+  { name: 'shadow refresh 1/2', on: () => { PT.shadowEvery = 2; }, off: () => { PT.shadowEvery = 1; } },
+  { name: 'msaa 2x', test: () => (post.samples || 0) > 2, on: () => post.setSamples?.(2), off: () => post.setSamples?.(Math.min(Q.msaa || 0, renderer.capabilities.maxSamples || 0)) },
+  { name: 'bloom res 0.35', test: () => !!post.bloom, on: () => post.setBloomScale?.(0.35), off: () => post.setBloomScale?.(Q.bloomScale || 1) },
+  { name: 'shadow map 1024', test: () => moon.castShadow && moon.shadow.mapSize.x > 1024, on: () => setShadowMap(1024), off: () => setShadowMap(Q.shadowMapSize) },
+  { name: 'msaa off', test: () => (post.samples || 0) > 0, on: () => { SAFE.msaaPrev = post.samples; post.setSamples?.(0); }, off: () => post.setSamples?.(SAFE.msaaPrev ?? Q.msaa) },
+  { name: 'render scale floor 0.5', test: () => dyn.on, on: () => { dynres.min = 0.5; }, off: () => { dynres.min = PERF.minScale; if (dynres.scale < dynres.min) dynres._set(dynres.min, 'safety undo'); } },
 ];
+function setShadowMap(n) { if (moon.shadow.mapSize.x === n) return; moon.shadow.mapSize.set(n, n); moon.shadow.map?.dispose(); moon.shadow.map = null; renderer.shadowMap.needsUpdate = true; }
 const dynAtFloor = () => !dyn.on || dynres.scale <= dynres.min + 1e-3;
 function safetyNet(d, ema) {
-  if (!SAFE.on || (G.state !== 'playing' && G.state !== 'title')) { SAFE.bad = SAFE.good = 0; return; }
-  SAFE.acc += d; if (SAFE.acc < 0.5) return; SAFE.acc = 0;
-  const fps = 1000 / ema, T = dynres.cap ? Math.min(PERF.targetFps, dynres.cap) : PERF.targetFps;
-  if (fps < T * 0.67 && dynAtFloor()) { SAFE.good = 0; if (++SAFE.bad >= 6 && SAFE.level < SAFE_STEPS.length) { const s = SAFE_STEPS[SAFE.level++]; s.on(); SAFE.steps.push(s.name); SAFE.bad = 0; console.info('[perf] safety net -> ' + s.name); } }
-  else if (fps > T * 0.97) { SAFE.bad = 0; if (++SAFE.good >= 20 && SAFE.level > 0) { const s = SAFE_STEPS[--SAFE.level]; s.off(); SAFE.steps.push('undo ' + s.name); SAFE.good = 0; console.info('[perf] safety net <- ' + s.name); } }
-  else { SAFE.bad = 0; SAFE.good = 0; }
+  if (!SAFE.on || (G.state !== 'playing' && G.state !== 'title') || document.hidden) { SAFE.bad = SAFE.good = 0; SAFE.trial = null; return; }
+  SAFE.clock += d; SAFE.acc += d; if (SAFE.acc < 0.5) return; SAFE.acc = 0;
+  const fps = 1000 / ema, T = PERF.targetFps;
+  if (SAFE.trial) { // verdict on the last step, 3 s after it was applied
+    const tr = SAFE.trial; if (SAFE.clock - tr.t < 3) return;
+    SAFE.trial = null;
+    if (fps < tr.fps * 1.04 && fps < T * 0.75) {
+      const s = SAFE_STEPS[tr.i]; s.off(); SAFE.active.pop(); SAFE.level = SAFE.active.length; SAFE.skip.add(tr.i);
+      SAFE.steps.push(`skip ${s.name}`); console.info(`[perf] tier ${s.name}: no gain (${tr.fps.toFixed(1)} -> ${fps.toFixed(1)} fps), undone`);
+    } else console.info(`[perf] tier ${SAFE_STEPS[tr.i].name}: ${tr.fps.toFixed(1)} -> ${fps.toFixed(1)} fps, kept`);
+    SAFE.bad = SAFE.good = 0; return;
+  }
+  const resolutionDone = dynAtFloor() || dynres.cap > 0;
+  if (fps < T * 0.75 && resolutionDone) {
+    SAFE.good = 0;
+    if (++SAFE.bad >= 6) {
+      SAFE.bad = 0;
+      const i = SAFE_STEPS.findIndex((s, k) => !SAFE.active.includes(k) && !SAFE.skip.has(k) && (!s.test || s.test()));
+      if (i < 0) return;
+      const s = SAFE_STEPS[i]; s.on(); SAFE.active.push(i); SAFE.level = SAFE.active.length; SAFE.steps.push(s.name);
+      SAFE.trial = { i, fps, t: SAFE.clock }; if (SAFE.clock - SAFE.undoneAt < 30) SAFE.hold = 60;
+      console.info(`[perf] tier -> ${s.name} (${fps.toFixed(1)} fps)`);
+    }
+  } else if (fps > T * 0.97) {
+    SAFE.bad = 0;
+    if (++SAFE.good >= SAFE.hold * 2 && SAFE.active.length) {
+      const i = SAFE.active.pop(), s = SAFE_STEPS[i]; s.off(); SAFE.level = SAFE.active.length; SAFE.steps.push('undo ' + s.name);
+      SAFE.good = 0; SAFE.undoneAt = SAFE.clock; SAFE.hold = 10; console.info('[perf] tier <- ' + s.name);
+    }
+  } else { SAFE.bad = 0; SAFE.good = 0; }
 }
 function perfCtl(d) {
   const ms = d * 1000; if (ms <= 0) return;
@@ -1460,15 +1505,20 @@ const fpsTxt = () => { const ms = dyn.raw || dyn.ema; return `${(1000 / ms).toFi
 let dbgEl = null, dbgT = 0;
 function debugOverlay(d) {
   if (!DEBUG && !FPS_OVL) return;
-  if (!dbgEl) { dbgEl = document.createElement('div'); dbgEl.id = 'dbgFps'; document.body.appendChild(dbgEl); if (DEBUG) renderer.info.autoReset = false; }
-  dbgT += d; if (dbgT < 0.5) { if (DEBUG) renderer.info.reset(); return; } dbgT = 0;
+  // calls / triangles of the last rendered frame (all passes: shadow + scene + post), counted without auto-reset
+  if (!dbgEl) { dbgEl = document.createElement('div'); dbgEl.id = 'dbgFps'; document.body.appendChild(dbgEl); }
+  const I0 = renderer.info.render; renderer.info.autoReset = false;
+  if (I0.calls) { PT.calls = I0.calls; PT.tris = I0.triangles; }
+  dbgT += d; if (dbgT < 0.5) { renderer.info.reset(); return; } dbgT = 0;
+  const shHz = PT.shadowRefresh / Math.max(0.001, (performance.now() - (PT.shT || 0)) / 1000); PT.shadowRefresh = 0; PT.shT = performance.now();
   const I = renderer.info.render, sz = renderer.getDrawingBufferSize(new THREE.Vector2());
-  const mp = (sz.x * sz.y / 1e6).toFixed(2), fb = [...governor.applied, ...SAFE.steps].join(', ') || 'no fallbacks';
+  const mp = (sz.x * sz.y / 1e6).toFixed(2), fb = [...governor.applied, ...SAFE.active.map(i => SAFE_STEPS[i].name)].join(', ') || 'no fallbacks';
+  const cpu = `${(PT.calls || 0)} calls · ${((PT.tris || 0) / 1e6).toFixed(2)}M tris · cpu ${PT.cpuUpdate.toFixed(1)}+${PT.cpuRender.toFixed(1)} ms · shadow ${shHz.toFixed(0)} Hz`;
   const res = `scale ${dynScale.toFixed(2)}${dyn.on ? '' : ' (fixed)'}${dynres.cap ? ` · cap ${dynres.cap.toFixed(0)}` : ''} · ${sz.x}x${sz.y} (${mp} MP) · pr ${renderer.getPixelRatio().toFixed(2)}`;
   dbgEl.textContent = DEBUG
-    ? `${fpsTxt()}\n${I.calls} calls · ${(I.triangles / 1e6).toFixed(2)}M tris\n${Q.name}${Q.auto ? ' (auto)' : ''} · composer ${post.enabled ? 'on' : 'off'}\n${res}\n${fb}`
-    : `${fpsTxt()}\n${res}\n${Q.name}${Q.auto ? ' (auto)' : ''} · ${fb}`;
-  if (DEBUG) renderer.info.reset();
+    ? `${fpsTxt()}\n${cpu}\n${Q.name}${Q.auto ? ' (auto)' : ''} · composer ${post.enabled ? 'on' : 'off'} · msaa ${post.samples ?? 0}\n${res}\n${fb}`
+    : `${fpsTxt()}\n${cpu}\n${res}\n${Q.name}${Q.auto ? ' (auto)' : ''} · msaa ${post.samples ?? 0} · ${fb}`;
+  renderer.info.reset();
 }
 let sdt = 1 / 60;
 function loop() {
@@ -1483,12 +1533,15 @@ function loop() {
   // so distance per second is identical at 20/30/60/120 Hz. Only a real stall (> 0.2 s, e.g. tab switch) is dropped.
   const dc = Math.min(0.2, d);
   sdt = Math.abs(dc - sdt) > sdt * 0.5 ? dc : sdt + (dc - sdt) * 0.3;
+  PT.t0 = performance.now();
   if (QA_FIXED) { frame(1 / 30); return; }
   const n = Math.max(1, Math.ceil(sdt / SUBSTEP - 1e-6)), h = sdt / n;
   if (n > 1) { simOnly = true; try { for (let i = 1; i < n; i++) frame(h); } finally { simOnly = false; } }
   frame(h);
 }
 const SUBSTEP = 1 / 30;
+let hudDt = 0;
+function mmState() { const Lv = CONFIG.levels[G.level]; return { player: player.pos, heading: player.heading, camYaw: cam.yaw, targets: G.targets, powerups: G.powerups, ice: G.ice, areaRadius: Lv.areaRadius, areaMin: Lv.areaMin, marks: obstacles.marks(), mump: G.mumpLeft > 0 }; }
 function frame(dt) {
   t += dt;
   const playing = G.state === 'playing';
@@ -1531,24 +1584,25 @@ function frame(dt) {
   // lights / shadow follow
   lightT -= dt; if (lightT <= 0) { lightT = 0.12; updateLightPool(); } fadeLightPool(dt);
   const focus = G.state === 'playing' || G.state === 'paused' || G.state === 'levelComplete' || G.state === 'gameOver' ? player.pos : _ORIGIN;
-  updateShadow(focus);
+  if (!simOnly) updateShadow(focus); // render-only state: skipped on sim-only substeps
   if (G.wardrobe && G.state === 'title') wardrobeLights(true); else if (WL.on) wardrobeLights(false);
-  snow.update(t, _v0.set(camera.position.x, 0, camera.position.z), G.storm, G.weather);
-  if (G.state !== 'title' && G.state !== 'ending') {
+  if (!simOnly) snow.update(t, _v0.set(camera.position.x, 0, camera.position.z), G.storm, G.weather);
+  hudDt += dt;
+  if (G.state !== 'title' && G.state !== 'ending' && !simOnly) { // HUD (DOM + minimap canvas) once per rendered frame, with the summed dt
     const S = { score: G.score, delivered: G.delivered, total: G.total, timer: G.timer, level: G.level, levelName: CONFIG.levels[G.level].name, mump: G.mumpLeft > 0, mumpLeft: G.mumpLeft, mumpDur: G.mumpDur, inRange: G.inRange || 0, powerupsLeft: G.powerups.filter(p => p.active).length, storm: G.storm, hint: G.hint, bonusFlash: G.bonusFlash };
-    hud.update(dt, S);
+    hud.update(hudDt, S);
     const left = X.comboWindow - (G.levelTime - G.lastDeliverT);
     hud.combo(left > 0 && G.state === 'playing' ? G.combo : 0, comboMult(G.combo), Math.max(0, left / X.comboWindow));
-    const Lv = CONFIG.levels[G.level];
-    hud.drawMinimap({ player: player.pos, heading: player.heading, camYaw: cam.yaw, targets: G.targets, powerups: G.powerups, ice: G.ice, areaRadius: Lv.areaRadius, areaMin: Lv.areaMin, marks: obstacles.marks(), mump: G.mumpLeft > 0 });
+    hud.drawMinimap(mmState()); // throttled inside (CONFIG.hud.minimapHz)
     hud.gust(obstacles.gust, cam.yaw, G.state === 'playing');
     hud.status({ lag: G.inLag && G.mumpLeft <= 0, steal: G.stealFlash > 0 });
   }
+  if (!simOnly) hudDt = 0;
   nav?.update(dt, t, { player: { x: player.pos.x, y: player.surfY || 0, z: player.pos.z }, targets: G.targets, camera, playing: G.state === 'playing' });
   // --- FX layer
   const camDist = camera.position.distanceTo(santa.root.position);
   fxs.cones?.update(dt, t, G.storm);
-  fxs.smoke?.update(t, G.storm, renderer.domElement.height, camera.fov);
+  if (!simOnly) fxs.smoke?.update(t, G.storm, renderer.domElement.height, camera.fov);
   fxs.feet?.update(t, player.pos, player.heading, !santa.stepEvents && playing && !G.onIce && !player.paved && player.speed > 0.3);
   fxs.puffs?.update(dt, renderer.domElement.height / (2 * Math.tan(THREE.MathUtils.degToRad(camera.fov / 2))));
   fxs.sparkles?.update(t, player.pos);
@@ -1556,13 +1610,15 @@ function frame(dt) {
   const wTrail = G.wardrobe && WD.slot === 'trail';
   trail.update(dt, santa.trailKind, santa.root.position, wTrail ? WD.yaw + Math.PI * 0.6 : player.heading, wTrail ? 6 : player.speed, playing || wTrail);
   fxs.waves.update(dt);
-  for (const L of fxs.snowLayers) L.s.update(t, L.near ? camera.position : _v0.set(camera.position.x, 0, camera.position.z), G.storm, G.weather);
+  if (!simOnly) for (const L of fxs.snowLayers) L.s.update(t, L.near ? camera.position : _v0.set(camera.position.x, 0, camera.position.z), G.storm, G.weather);
   G.flash = Math.max(0, (G.flash || 0) - dt * 2.2);
   const dofFocus = G.state === 'title' ? cam.pos.distanceTo(cam.look) : G.state === 'ending' ? 200 : camDist;
-  post.update(t, { focus: dofFocus, boost: G.mumpLeft > 0 ? 0.6 + 0.4 * Math.sin(t * 4) : 0, flash: G.flash, storm: G.storm });
+  if (!simOnly) post.update(t, { focus: dofFocus, boost: G.mumpLeft > 0 ? 0.6 + 0.4 * Math.sin(t * 4) : 0, flash: G.flash, storm: G.storm });
   if (simOnly) return;
-  culler?.update(dt, camera);
+  culler?.update(dt, camera, shadowInfo());
+  const tR = performance.now(); PT.cpuUpdate += ((tR - PT.t0) - PT.cpuUpdate) * 0.1;
   post.render();
+  PT.cpuRender += ((performance.now() - tR) - PT.cpuRender) * 0.1;
   if (BP.enabled) blackProbe(t); // opt-in (?probe=1): its synchronous readPixels stalled the GPU pipeline every 2 s (periodic hitch)
   music.setBoost(G.state === 'playing' && G.mumpLeft > 0); sfx.wind(G.state === 'playing' || G.state === 'paused' ? (G.storm || 0) : 0.15);
   governor.tick(dt, (G.state === 'playing' || G.state === 'title') && dynAtFloor());
@@ -1576,10 +1632,10 @@ function debugAPI() {
     G, player, CONFIG, renderer, world, santa, scene, camera, post, get hud() { return hud; }, get nav() { return nav; },
     get state() { return G.state; },
     cosmetics, progress, showUnlocks, openWardrobe, closeWardrobe, WD, lb, openBoard, closeBoard, tryLook: (ids) => { const L = cosmetics.look(); for (const id of ids) { const it = BY_ID[id]; L[it.slot] = it; } applyLook(santa, L); return Object.values(L).map(i => i.id); },
-    resolveWindows: async (rects) => { const { resolveWindows } = await import('./interiors.js?v=3c3cf266'); const out = {}; for (const b of world.buildings) { if (!b.isGLB || out[b.type] || !rects[b.type]) continue; out[b.type] = resolveWindows(b.holder.children[0], b.holder, rects[b.type]); } return out; },
-    facadeShots: async (side = 0, mask = false) => { const { facadeShot } = await import('./interiors.js?v=3c3cf266'); const out = {}; for (const b of world.buildings) { if (!b.isGLB || out[b.type]) continue; out[b.type] = facadeShot(b.holder.children[0], b.holder, renderer, side, 48, mask); } return out; },
+    resolveWindows: async (rects) => { const { resolveWindows } = await import('./interiors.js?v=77728b1a'); const out = {}; for (const b of world.buildings) { if (!b.isGLB || out[b.type] || !rects[b.type]) continue; out[b.type] = resolveWindows(b.holder.children[0], b.holder, rects[b.type]); } return out; },
+    facadeShots: async (side = 0, mask = false) => { const { facadeShot } = await import('./interiors.js?v=77728b1a'); const out = {}; for (const b of world.buildings) { if (!b.isGLB || out[b.type]) continue; out[b.type] = facadeShot(b.holder.children[0], b.holder, renderer, side, 48, mask); } return out; },
     // dev: detect lit window rects on each Tripo building type (output -> assets/windows.js)
-    detectWindows: async () => { const { detectWindows } = await import('./interiors.js?v=3c3cf266'); const out = {}; for (const b of world.buildings) { if (!b.isGLB || out[b.type]) continue; const o = b.holder.children[0]; out[b.type] = detectWindows(o, b.holder, renderer); } return out; },
+    detectWindows: async () => { const { detectWindows } = await import('./interiors.js?v=77728b1a'); const out = {}; for (const b of world.buildings) { if (!b.isGLB || out[b.type]) continue; const o = b.holder.children[0]; out[b.type] = detectWindows(o, b.holder, renderer); } return out; },
     start: (lv = 0) => { G.qaMute = true; initAudio(false); startLevel(lv); },
     // stage beatability: road-graph route estimate vs timer for one stage (i) or all of them
     routeCheck: (i = null) => { const sp = spawnPoint(); const one = k => routeCheck(graph, planStage(world, graph, k, sp), sp); return i == null ? CONFIG.levels.map((_, k) => one(k)) : one(i); },
@@ -1608,10 +1664,13 @@ function debugAPI() {
     audio: () => audioStatus(),
     audioOffline: (sec = 20, legacy = false, rate = 2.2) => renderEndingOffline(sec, legacy, rate),
     nanView: on => { post.nanView(on); return !!post.sanitize; },
-    safety: () => ({ on: SAFE.on, level: SAFE.level, steps: SAFE.steps, dynScale, pixelRatio: renderer.getPixelRatio() }),
+    // QA: drive the perf-tier controller with a synthetic frame rate (secs of 0.5 s ticks), returns safety()
+    tierSim: (fps, secs = 1) => { const on = SAFE.on; SAFE.on = true; try { for (let i = 0; i < secs * 2; i++) safetyNet(0.5, 1000 / fps); } finally { SAFE.on = on; } return window.__xmas.safety(); },
+    safety: () => ({ on: SAFE.on, level: SAFE.level, steps: SAFE.steps, active: SAFE.active.map(i => SAFE_STEPS[i].name), skipped: [...SAFE.skip].map(i => SAFE_STEPS[i].name), tiers: SAFE_STEPS.map(s => s.name), shadowEvery: PT.shadowEvery, msaa: post.samples ?? 0, shadowMap: moon.shadow.mapSize.x, cpu: { update: PT.cpuUpdate, render: PT.cpuRender }, dynScale, pixelRatio: renderer.getPixelRatio() }),
     dynres: () => ({ on: dyn.on, scale: dynres.scale, min: dynres.min, cap: dynres.cap, ceil: dynres.t < dynres.ceilUntil ? dynres.ceil : null, history: dynres.history, budget: pixelBudget(), buffer: (v => [v.x, v.y])(renderer.getDrawingBufferSize(new THREE.Vector2())) }),
     fx: () => ({ blackProbe: BP.steps, quality: Q, governor: governor.applied, chimneys: world.buildings.filter(b => b.chimney).length, lamps: fxs.cones?.lamps.length || 0, env: !!scene.environment }),
     santaPos: () => player.pos.toArray(),
+    drawMap: () => hud.drawMinimap(mmState(), true), // QA: force a minimap redraw now (normal redraws are throttled)
     camYaw: (y) => { if (y !== undefined) { cam.yaw = y; input.lastManualCam = performance.now(); } return { yaw: cam.yaw, dist: +cam.dist.toFixed(2), h: +(cam.h ?? 0).toFixed(2), pos: camera.position.toArray().map(v => +v.toFixed(2)), fov: +camera.fov.toFixed(1), near: camera.near }; },
     advance: (sec, step = 1 / 30) => { simOnly = true; try { for (let i = 0; i < Math.round(sec / step); i++) frame(step); } finally { simOnly = false; } return G.state; },
     // one fully rendered frame, all passes (shadow + scene + post): draw calls / triangles / pixel size
@@ -1623,7 +1682,7 @@ function debugAPI() {
     decorGaps: (g, s) => world.decorGaps(g, s),
     floatingDecor: () => world.floatingDecor(pines ? pines.trees.map(t => ({ kind: t.mini ? 'miniTree' : 'pine', x: t.x, y: t.y, z: t.z })) : []),
     stats: () => {
-      culler?.update(1, camera); const I = renderer.info; I.autoReset = false; I.reset(); renderer.shadowMap.needsUpdate = true; post.render(); const all = { calls: I.render.calls, triangles: I.render.triangles };
+      culler?.update(1, camera, shadowInfo()); const I = renderer.info; I.autoReset = false; I.reset(); renderer.shadowMap.needsUpdate = true; post.render(); const all = { calls: I.render.calls, triangles: I.render.triangles };
       I.reset(); const sm = renderer.shadowMap.autoUpdate; renderer.render(scene, camera); const sc = { calls: I.render.calls, triangles: I.render.triangles }; I.autoReset = true;
       let meshes = 0, inst = 0, lights = 0; scene.traverseVisible(o => { if (o.isMesh || o.isPoints || o.isLine) meshes++; if (o.isInstancedMesh) inst += o.count; if (o.isLight && o.intensity > 0) lights++; });
       const sz = renderer.getDrawingBufferSize(new THREE.Vector2());

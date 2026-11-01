@@ -1,19 +1,22 @@
 // DOM HUD: score, Gossip vs Optimum comparison, timer, minimap, power-up status.
-import { CONFIG, formatEth, fmt } from './config.js?v=3c3cf266';
-import { logoSVG } from './logo.js?v=3c3cf266';
+import { CONFIG, formatEth, fmt } from './config.js?v=77728b1a';
+import { logoSVG } from './logo.js?v=77728b1a';
 
 const $ = id => document.getElementById(id);
+// per-frame HUD text: only touch the DOM when the string changed (a same-value textContent write still replaces the
+// text node and invalidates style / layout - measurable on Safari at 20-60 Hz)
+const txt = (id, v) => { const e = $(id); if (!e) return; v = String(v); if (e._txt !== v) { e._txt = v; e.textContent = v; } };
 
 export class HUD {
   constructor(world) {
     this.world = world;
     const B = CONFIG.branding;
-    $('scoreLabel').textContent = B.scoreLabel; $('scoreUnit').textContent = B.scoreUnit;
-    $('scoreTarget').textContent = B.targetLabel;
-    $('gossipName').textContent = B.gossipLabel; $('optimumName').textContent = B.optimumLabel;
-    $('gossipMs').textContent = `${Math.round(B.gossipMs)} ms`; $('optimumMs').textContent = `${Math.round(B.optimumMs)} ms`;
+    txt('scoreLabel', B.scoreLabel); txt('scoreUnit', B.scoreUnit);
+    txt('scoreTarget', B.targetLabel);
+    txt('gossipName', B.gossipLabel); txt('optimumName', B.optimumLabel);
+    txt('gossipMs', `${Math.round(B.gossipMs)} ms`); txt('optimumMs', `${Math.round(B.optimumMs)} ms`);
     document.querySelector('#rowOptimum .bar i').style.width = (100 * B.optimumMs / B.gossipMs).toFixed(1) + '%';
-    $('mumpTag').textContent = B.mumpLabel;
+    txt('mumpTag', B.mumpLabel);
     $('powerLogo').innerHTML = logoSVG({ width: 64, height: 38, stroke: 2.4, color: '#51B1FE' });
     this.mm = $('minimap'); this.ctx = this.mm.getContext('2d');
     this.mmRange = 95; // world units shown from center to edge
@@ -23,28 +26,32 @@ export class HUD {
   show(v) { $('hud').classList.toggle('hidden', !v); }
 
   renderMapBackground() {
-    // pre-render whole world once (1px = 1 unit * k)
-    const W = CONFIG.world.radius + 10, k = 3, size = W * 2 * k;
+    // Pre-render the whole village once, in world units (1 unit = k px), straight from the same data the 3D world
+    // is built from: world.roads (the polylines the cobble ribbons are extruded from, at the real road width),
+    // world.paths (door walkways), the square, the lake, world.buildings (position, rotation, footprint) and the forest.
+    const WR = CONFIG.world, W = WR.radius + 10, k = 3, size = Math.ceil(W * 2 * k);
     const c = document.createElement('canvas'); c.width = c.height = size;
     const g = c.getContext('2d');
     const P = (x, z) => [(x + W) * k, (z + W) * k];
     g.fillStyle = '#10213d'; g.fillRect(0, 0, size, size);
-    g.fillStyle = '#e6eef8'; g.globalAlpha = 0.14; g.beginPath(); g.arc(...P(0, 0), CONFIG.world.radius * k, 0, 7); g.fill(); g.globalAlpha = 1;
+    g.fillStyle = '#e6eef8'; g.globalAlpha = 0.14; g.beginPath(); g.arc(...P(0, 0), WR.radius * k, 0, 7); g.fill(); g.globalAlpha = 1;
     // forest ring
     g.fillStyle = '#0e3b2a'; for (const [tx, tz] of this.world.trees || []) { g.beginPath(); g.arc(...P(tx, tz), 1.6 * k, 0, 7); g.fill(); }
     // lake
     const L = this.world.lake; if (L) { g.fillStyle = '#5fa7d6'; g.beginPath(); g.ellipse(...P(L.cx, L.cz), L.rx * k, L.rz * k, 0, 0, 7); g.fill(); }
-    // roads: straight from world.roads (the same polylines the road ribbons are built from), drawn wider than
-    // life and snow-coloured so they read at 100 px; a dark casing keeps junctions legible. Door walkways
-    // (world.paths) are no longer drawn - at minimap scale they looked like extra streets that don't exist.
+    // roads at their real width (+ a thin dark casing so junctions stay legible); no inflation, so houses sit
+    // exactly where they stand next to the cobbles in the world
     const road = (w, col) => { g.strokeStyle = col; g.lineWidth = w; g.lineCap = 'round'; g.lineJoin = 'round';
       for (const r of this.world.roads) { g.beginPath(); r.pts.forEach((p, i) => i ? g.lineTo(...P(p.x, p.z)) : g.moveTo(...P(p.x, p.z))); if (r.closed) g.closePath(); g.stroke(); } };
-    const rw = CONFIG.world.roadWidth * 1.3 * k;
-    road(rw + 1.6 * k, '#4f6684'); road(rw, '#eef5fd');
-    g.fillStyle = '#4f6684'; g.beginPath(); g.arc(...P(0, 0), (CONFIG.world.squareRadius + 1) * k, 0, 7); g.fill();
-    g.fillStyle = '#eef5fd'; g.beginPath(); g.arc(...P(0, 0), CONFIG.world.squareRadius * k, 0, 7); g.fill();
+    const rw = WR.roadWidth * k;
+    road(rw + 1.4 * k, '#4f6684'); road(rw, '#eef5fd');
+    g.fillStyle = '#4f6684'; g.beginPath(); g.arc(...P(0, 0), (WR.squareRadius + 0.7) * k, 0, 7); g.fill();
+    g.fillStyle = '#eef5fd'; g.beginPath(); g.arc(...P(0, 0), WR.squareRadius * k, 0, 7); g.fill();
     g.fillStyle = '#2f8a3e'; g.beginPath(); g.arc(...P(0, 0), 5 * k, 0, 7); g.fill();
-    // houses
+    // door walkways (real 1.6 m width, dimmer than streets so they read as paths, not extra roads)
+    g.strokeStyle = 'rgba(214,228,245,.55)'; g.lineCap = 'butt';
+    for (const q of this.world.paths || []) { g.lineWidth = (q.w || 1.6) * k; g.beginPath(); g.moveTo(...P(q.x0, q.z0)); g.lineTo(...P(q.x1, q.z1)); g.stroke(); }
+    // houses (three.js rotation.y = theta  <=>  canvas rotate(-theta) with canvas y = world z)
     for (const b of this.world.buildings) {
       g.save(); g.translate(...P(b.x, b.z)); g.rotate(-b.rot);
       g.fillStyle = b.type === 'validatorHouse' ? '#6aa9d8' : '#8a6b52';
@@ -59,14 +66,14 @@ export class HUD {
     // score count-up
     this.displayScore += (s.score - this.displayScore) * Math.min(1, dt * 6);
     if (Math.abs(s.score - this.displayScore) < 1) this.displayScore = s.score;
-    $('scoreVal').textContent = this.displayScore >= 1e3 ? formatEth(this.displayScore) : Math.round(this.displayScore);
-    $('blocksLeft').textContent = `${s.delivered}/${s.total}`;
+    txt('scoreVal', this.displayScore >= 1e3 ? formatEth(this.displayScore) : Math.round(this.displayScore));
+    txt('blocksLeft', `${s.delivered}/${s.total}`);
     // timer
     const t = Math.max(0, s.timer); const m = Math.floor(t / 60), sec = Math.floor(t % 60);
-    $('timerVal').textContent = `${m}:${sec.toString().padStart(2, '0')}`;
+    txt('timerVal', `${m}:${sec.toString().padStart(2, '0')}`);
     $('hudTimer').classList.toggle('low', t < 15);
-    $('levelName').textContent = `Stage ${s.level + 1} · ${s.levelName}`;
-    $('timerSub').textContent = s.bonusFlash > 0 ? `+${CONFIG.delivery.timerBonus}s block bonus` : '';
+    txt('levelName', `Stage ${s.level + 1} · ${s.levelName}`);
+    txt('timerSub', s.bonusFlash > 0 ? `+${CONFIG.delivery.timerBonus}s block bonus` : '');
     // comparison
     $('rowGossip').classList.toggle('active', !s.mump);
     $('rowOptimum').classList.toggle('active', s.mump);
@@ -77,14 +84,14 @@ export class HUD {
     const pkey = s.mump ? 'on' : (s.powerupsLeft || 0) + '';
     if (pkey !== this._pkey) { this._pkey = pkey; this.peekT = 3; }
     this.peekT = Math.max(0, (this.peekT || 0) - dt); $('hudPower').classList.toggle('peek', this.peekT > 0);
-    $('powerState').textContent = s.mump ? `ACTIVE · ${s.mumpLeft.toFixed(1)}s · shards x${s.inRange}` : (s.powerupsLeft ? `${s.powerupsLeft} Optimum pickup${s.powerupsLeft > 1 ? 's' : ''} on the roads` : 'Next pickup respawning…');
+    txt('powerState', s.mump ? `ACTIVE · ${s.mumpLeft.toFixed(1)}s · shards x${s.inRange}` : (s.powerupsLeft ? `${s.powerupsLeft} Optimum pickup${s.powerupsLeft > 1 ? 's' : ''} on the roads` : 'Next pickup respawning…'));
     $('powerBar').style.width = s.mump ? (100 * s.mumpLeft / s.mumpDur).toFixed(1) + '%' : '0%';
     $('stormWarn').classList.toggle('show', s.storm > 0.3);
     // toast
     if (this.toastT > 0) { this.toastT -= dt; if (this.toastT <= 0) $('toast').classList.remove('show'); }
     // hold hint
     const hh = $('holdHint');
-    if (s.hint) { hh.textContent = s.hint; hh.classList.add('show'); } else hh.classList.remove('show');
+    if (s.hint) { txt('holdHint', s.hint); hh.classList.add('show'); } else hh.classList.remove('show');
   }
   boost() {
     const X = CONFIG.boosted, el = $('boostCallout');
@@ -123,15 +130,30 @@ export class HUD {
   }
   toast(text, dur = 1.8) { const t = $('toast'); t.textContent = text; t.classList.add('show'); this.toastT = dur; }
 
-  drawMinimap(s) {
-    const g = this.ctx, S = this.mm.width, half = S / 2, R = this.mmRange, sc = half / R;
+  /** Redraws are throttled to CONFIG.hud.minimapHz (default 20 Hz; force=true always draws). */
+  drawMinimap(s, force = false) {
+    const now = performance.now(), hz = CONFIG.hud?.minimapHz ?? 20;
+    if (!force && now - (this._mmT || 0) < 1000 / hz - 4) return false;
+    this._mmT = now;
+    // backing store = CSS size x devicePixelRatio (<= 2) so the map is sharp on Retina; all drawing below is in a
+    // fixed 220-unit logical space (marker sizes unchanged)
+    if (!this._mmSizeT || now - this._mmSizeT > 1000) {
+      this._mmSizeT = now; const css = this.mm.clientWidth || 200, want = Math.max(120, Math.min(440, Math.round(css * Math.min(2, devicePixelRatio || 1))));
+      if (Math.abs(this.mm.width - want) > 2) { this.mm.width = this.mm.height = want; }
+    }
+    const g = this.ctx, LS = 220, S = LS, half = S / 2, R = this.mmRange, sc = half / R;
     const { canvas, W, k } = this.bg;
-    g.save(); g.clearRect(0, 0, S, S);
+    g.setTransform(1, 0, 0, 1, 0, 0); g.clearRect(0, 0, this.mm.width, this.mm.height);
+    g.save(); g.scale(this.mm.width / LS, this.mm.height / LS); g.save();
     g.beginPath(); g.arc(half, half, half, 0, 7); g.clip();
     // rotate map so camera-forward is up
     g.translate(half, half); g.rotate(s.camYaw - Math.PI); // camera forward -> up
     const px = s.player.x, pz = s.player.z;
-    g.drawImage(canvas, (px + W) * k - R * k * 1.5, (pz + W) * k - R * k * 1.5, R * k * 3, R * k * 3, -R * sc * 1.5, -R * sc * 1.5, R * sc * 3, R * sc * 3);
+    // Whole pre-rendered village, placed by a plain transform (5-argument drawImage). The old 9-argument call cut a
+    // 3R window around the player whose source rect ran past the bitmap edge whenever the player was > ~17 m off
+    // centre; WebKit/Safari clips such a rect without moving the destination origin, so on Mac/iPhone the map slid
+    // and scaled away from the real streets. No source rect -> identical on every browser.
+    g.drawImage(canvas, (-W - px) * sc, (-W - pz) * sc, canvas.width / k * sc, canvas.height / k * sc);
     const toM = (x, z) => [(x - px) * sc, (z - pz) * sc];
     // area ring
     g.strokeStyle = 'rgba(143,220,255,.25)'; g.lineWidth = 1.5; g.setLineDash([4, 4]);
@@ -191,6 +213,7 @@ export class HUD {
     g.beginPath(); g.moveTo(0, -9); g.lineTo(6, 7); g.lineTo(0, 3); g.lineTo(-6, 7); g.closePath(); g.fill(); g.stroke();
     g.restore();
     g.strokeStyle = 'rgba(143,220,255,.5)'; g.lineWidth = 2; g.beginPath(); g.arc(half, half, half - 1, 0, 7); g.stroke();
-    g.fillStyle = 'rgba(233,242,255,.8)'; g.font = 'bold 11px system-ui'; g.textAlign = 'center';
+    g.restore();
+    return true;
   }
 }

@@ -6,7 +6,7 @@
 //   submit(run)                -> { rank, players, overallRank, improved } | { error }
 //   top(board 'all' | 1..16)   -> { entries:[{rank,name,eth,time,stars,me}], me:{rank,eth,time,stars}|null, players, note? }
 //   setName(name)              -> { ok, name } | { ok:false, why }
-import { cleanName, checkRun, NAME_MAX } from '../server/shared/rules.js?v=3c3cf266';
+import { cleanName, checkRun, NAME_MAX } from '../server/shared/rules.js?v=77728b1a';
 export { cleanName, NAME_MAX };
 
 const defaultName = (pid) => 'Santa ' + pid.slice(-4).toUpperCase();
