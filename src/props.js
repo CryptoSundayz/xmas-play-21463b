@@ -1,7 +1,7 @@
 // Procedural props + characters' placeholders (pine, lamp, christmas tree, snowman, sleigh, reindeer, bench, gift)
 import * as THREE from 'three';
 import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
-import { materials } from './materials.js?v=9dded00c';
+import { materials } from './materials.js?v=3c3cf266';
 
 function colored(geo, color) {
   geo = geo.index ? geo.toNonIndexed() : geo;

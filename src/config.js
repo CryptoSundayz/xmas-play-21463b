@@ -255,10 +255,11 @@ export const CONFIG = {
     low:    { pixelRatio: 1.0,  shadows: false, shadowMapSize: 512,  bloom: false, bloomScale: 0.5, msaa: 0, ao: false, dof: false, grade: false, env: true,
               shafts: false, smoke: false, footprints: true, sparkle: false, snowLayers: 1, snowCount: 600, forestScale: 0.4, lights: 0,  antialias: false,
               far: 64, fogMin: 0.026, cullRadius: 40, lodDistance: 24, chunkCell: 80, propRadius: 34 },
-    medium: { pixelRatio: 1.25, shadows: true,  shadowMapSize: 2048, bloom: true, bloomScale: 0.75, msaa: 2, ao: false, dof: false, grade: true, env: true,
+    medium: { pixelRatio: 1.25, shadows: true,  shadowMapSize: 2048, bloom: true, bloomScale: 0.5,  msaa: 2, ao: false, dof: false, grade: true, env: true,
               shafts: true,  smoke: true,  footprints: true, sparkle: true,  snowLayers: 2, snowCount: 2500, forestScale: 0.8,  lights: 4,  antialias: false },
-    // high = smooth 60 fps on an Apple M-series laptop: 1.5x render scale cap, 2K tight shadows, GTAO + DOF only in cutscenes
-    high:   { pixelRatio: 1.5,  shadows: true,  shadowMapSize: 2048, bloom: true, bloomScale: 0.75, msaa: 4, ao: 'cinematic', dof: 'cinematic', grade: true, env: true,
+    // high = smooth 60 fps on an Apple laptop (incl. the A18 Pro MacBook Neo): 1.5x render scale cap within a 2.8 MP budget,
+    // half-res bloom chain (a wide blur: visually the same as 0.75), 2K tight shadows, GTAO + DOF only in cutscenes
+    high:   { pixelRatio: 1.5,  shadows: true,  shadowMapSize: 2048, bloom: true, bloomScale: 0.5,  msaa: 4, ao: 'cinematic', dof: 'cinematic', grade: true, env: true,
               shafts: true,  smoke: true,  footprints: true, sparkle: true,  snowLayers: 3, snowCount: 3500, forestScale: 1.0,  lights: 5,  antialias: false },
     // ultra = beauty / screenshot preset (the old 'high'): 2x scale, 4K shadows, GTAO + DOF always on
     ultra:  { pixelRatio: 2.0,  shadows: true,  shadowMapSize: 4096, bloom: true, bloomScale: 1.0, msaa: 4, ao: true,  dof: true,  grade: true, env: true,
@@ -277,10 +278,13 @@ export const CONFIG = {
   bloom: { strength: 0.7, radius: 0.5, threshold: 0.85 },
   // ---------------------------------------------------------------- performance
   performance: {
-    targetFps: 60,              // dynamic resolution + quality governor aim for this (auto quality only)
-    dynamicResolution: true,    // scale the render resolution with frame time (auto quality only)
-    minScale: 0.6, maxScale: 1.0, // fraction of the preset pixel ratio
-    maxPixels: { desktop: 4.2e6, mobile: 2.0e6 }, // hard cap on drawing-buffer pixels (also clamped to GPU limits)
+    targetFps: 60,              // dynamic resolution (all presets) + quality governor (auto only) aim for this
+    dynamicResolution: true,    // scale the render resolution with frame time on every device / preset (src/dynres.js); ?dynres=0 off
+    minScale: 0.6, maxScale: 1.0, // fraction of the budgeted pixel ratio
+    // hard cap on drawing-buffer pixels (also clamped to GPU limits). Desktop per preset: HIGH used to allow 4.2 MP
+    // (~3.3 MP on a 1512x982 @2x Safari window, x4 MSAA) while an iPhone on HIGH draws ~0.35-1.3 MP with no MSAA;
+    // 2.8 MP keeps a 13-16" Retina laptop at ~1.3-1.4 device px per CSS px. ULTRA (beauty) keeps 4.2 MP.
+    maxPixels: { desktop: 2.8e6, high: 2.8e6, medium: 2.2e6, ultra: 4.2e6, mobile: 2.0e6 },
     ios: { maxPixelRatio: 1.0, maxPixels: 1.3e6, msaa: 0, shadowMapSize: 512, bloomScale: 0.4 }, // iPhone/iPad Safari: lighter still (tile GPU memory, thermal throttling, jetsam kills)
     mobile: { maxPixelRatio: 1.5, ao: false, dof: false, msaa: 2, shadowMapSize: 1024 }, // always applied on touch devices
     shadowFrustum: 28,          // half-size (m) of the moon shadow box around the player
