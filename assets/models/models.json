@@ -10,6 +10,7 @@
     "assets/models/building_toy_workshop.glb",
     "assets/models/building_validator_house.glb",
     "assets/models/building_windmill.glb",
+    "assets/models/mascot.glb",
     "assets/models/prop_bench.glb",
     "assets/models/prop_christmas_tree.glb",
     "assets/models/prop_gift_box.glb",
@@ -17,9 +18,9 @@
     "assets/models/prop_pine.glb",
     "assets/models/prop_sleigh.glb",
     "assets/models/prop_snowman.glb",
+    "assets/models/prop_snowplow.glb",
     "assets/models/prop_street_lamp.glb",
     "assets/models/reindeer.glb",
-    "assets/models/santa.glb",
-    "assets/models/mascot.glb"
+    "assets/models/santa.glb"
   ]
 }

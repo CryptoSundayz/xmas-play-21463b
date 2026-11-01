@@ -2,7 +2,7 @@
 // off-screen edge indicators for the remaining houses, and an "N houses left" pill. Beacons + minimap live in
 // main.js / hud.js and read the same config.
 import * as THREE from 'three';
-import { CONFIG } from './config.js?v=731ffe7a';
+import { CONFIG } from './config.js?v=5361c3f3';
 
 const $ = id => document.getElementById(id);
 

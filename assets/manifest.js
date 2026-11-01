@@ -84,5 +84,8 @@ export const MANIFEST = {
     bench:         { glb: 'assets/models/prop_bench.glb',          fit: { height: 0.9 } },
     giftPile:      { glb: 'assets/models/prop_gift_pile.glb',      fit: { height: 1.1 } },
     giftBox:       { glb: 'assets/models/prop_gift_box.glb',       fit: { height: 0.5 } },
+    // Tripo snowplow (front faces +Z); obstacles.js instances it, places beacon/headlight glows at these local points
+    snowplow:      { glb: 'assets/models/prop_snowplow.glb',       fit: { height: 2.36 }, instanced: true, zOffset: 0.2,
+                     beacon: [0, 2.36, 0.47], headlights: [[-0.68, 1.05, 2.1], [0.68, 1.05, 2.1]] },
   },
 };

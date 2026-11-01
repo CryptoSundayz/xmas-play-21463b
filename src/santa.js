@@ -1,11 +1,11 @@
 // Santa: GLB (rigged, AnimationMixer idle/walk/run blend) if present, else procedural.
 // Santa always HOLDS the glowing blue gift (the block) in front of the chest.
 import * as THREE from 'three';
-import { MANIFEST, instantiate, findClip } from './assets.js?v=731ffe7a';
-import { glowGift } from './props.js?v=731ffe7a';
-import { materials } from './materials.js?v=731ffe7a';
-import { CONFIG } from './config.js?v=731ffe7a';
-import { glbMascot } from './mascot.js?v=731ffe7a';
+import { MANIFEST, instantiate, findClip } from './assets.js?v=5361c3f3';
+import { glowGift } from './props.js?v=5361c3f3';
+import { materials } from './materials.js?v=5361c3f3';
+import { CONFIG } from './config.js?v=5361c3f3';
+import { glbMascot } from './mascot.js?v=5361c3f3';
 
 export function createSanta(quality = 'high') {
   const useMascot = CONFIG.character.type === 'mascot';

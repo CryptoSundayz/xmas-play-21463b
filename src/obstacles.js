@@ -4,9 +4,9 @@
 // is built; Obstacles builds light meshes (merged / instanced: 1-2 draw calls per obstacle type) and runs them.
 import * as THREE from 'three';
 import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
-import { CONFIG, difficulty } from './config.js?v=731ffe7a';
-import { rng, lerp, clamp, textTexture } from './util.js?v=731ffe7a';
-import { planRoute } from './routegraph.js?v=731ffe7a';
+import { CONFIG, difficulty } from './config.js?v=5361c3f3';
+import { rng, lerp, clamp, textTexture } from './util.js?v=5361c3f3';
+import { planRoute } from './routegraph.js?v=5361c3f3';
 
 const TAU = Math.PI * 2;
 const hyp = Math.hypot;
@@ -234,9 +234,10 @@ export class Obstacles {
   }
   add(o) { this.scene.add(o); this.objs.push(o); return o; }
   clear() {
-    for (const o of this.objs) { o.parent?.remove(o); o.traverse(m => { m.geometry?.dispose(); for (const x of [].concat(m.material || [])) { if (x.map && x.map !== _barrierTex) x.map.dispose(); x.dispose(); } }); }
+    for (const o of this.objs) { o.parent?.remove(o); o.traverse(m => { m.geometry?.dispose(); for (const x of [].concat(m.material || [])) { if (x.map && x.map !== _barrierTex && !x.userData.sharedMaps) x.map.dispose(); x.dispose(); } }); }
     this.objs = []; this.plows = []; this.balls = []; this.bots = []; this.lag = []; this.fences = []; this.barriers = [];
     this.boss = null; this.wind = null; this.gust = { x: 0, z: 0, k: 0, warn: 0 }; this.world.dyn.length = 0; this.lagMat = null; this.lampMat = null; this.beaconMat = null;
+    this.plowMesh = null; this.plowParts = null; this.plowBeacon = null; this.plowGlow = null; this.plowHalo = null; this.plowPools = null;
   }
   surf(x, z) { return this.world.surfaceAt(x, z).y; }
 
@@ -301,15 +302,48 @@ export class Obstacles {
       const tex = textTexture('LAG +300 ms', { w: 512, h: 128, bg: 'rgba(48,8,4,0.78)', fg: '#ffb39a', border: '#ff5a3a', glow: '#ff5a3a', font: 'bold 64px system-ui, sans-serif' });
       for (const z of plan.lag) { const sp = new THREE.Sprite(new THREE.SpriteMaterial({ map: tex, transparent: true, depthWrite: false })); sp.scale.set(3.6, 0.9, 1); sp.position.set(z.x, this.surf(z.x, z.z) + 2.6, z.z); this.add(sp); }
     }
-    // ---- snowplows (instanced body + blinking beacons)
+    // ---- snowplows: Tripo GLB (instanced, LOD1 on LOW) or procedural fallback, + blinking beacon, headlight glows
     if (plan.plows.length) {
-      const n = plan.plows.length;
-      const body = new THREE.InstancedMesh(plowGeometry(), new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.6, metalness: 0.1 }), n);
-      body.castShadow = shadow; body.name = 'plows'; body.frustumCulled = false; this.add(body);
-      const bg = new THREE.CylinderGeometry(0.16, 0.16, 0.22, 10); bg.translate(0, 2.8, -0.85);
+      const n = plan.plows.length, E = MANIFEST.props.snowplow;
+      const parts = E && bakedMeshes(E, { lod: this.low ? 1 : 0 });
+      let beaconAt = [0, 2.8, -0.85], heads = [[-0.75, 0.95, 1.95], [0.75, 0.95, 1.95]];
+      if (parts && parts.length) {
+        this.plowParts = parts.map(({ geometry, material }) => {
+          geometry.translate(0, 0, E.zOffset || 0);
+          const m = material.clone(); m.userData.sharedMaps = true; // textures belong to the GLB cache
+          if (m.emissiveMap) { m.emissive.setRGB(1, 0.86, 0.62); m.emissiveIntensity = 2.2; }
+          const im = new THREE.InstancedMesh(geometry, m, n);
+          im.castShadow = shadow; im.receiveShadow = !this.low; im.name = 'plows'; im.frustumCulled = false; return this.add(im);
+        });
+        beaconAt = E.beacon; heads = E.headlights;
+      } else {
+        const body = new THREE.InstancedMesh(plowGeometry(), new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.6, metalness: 0.1 }), n);
+        body.castShadow = shadow; body.name = 'plows'; body.frustumCulled = false; this.add(body);
+        this.plowParts = [body];
+      }
+      this.plowMesh = this.plowParts[0];
+      const glb = !!(parts && parts.length);
+      const bg = glb ? new THREE.SphereGeometry(0.15, 12, 6, 0, Math.PI * 2, 0, Math.PI / 2) : new THREE.CylinderGeometry(0.16, 0.16, 0.22, 10);
+      bg.translate(beaconAt[0], beaconAt[1] - (glb ? 0.06 : 0), beaconAt[2]);
       this.beaconMat = new THREE.MeshBasicMaterial({ color: new THREE.Color(1, 0.6, 0.05).multiplyScalar(3), toneMapped: false });
       const bea = new THREE.InstancedMesh(bg, this.beaconMat, n); bea.frustumCulled = false; this.add(bea);
-      this.plowMesh = body; this.plowBeacon = bea;
+      this.plowBeacon = bea;
+      // glow sprites: small blinking beacon halo + 2 headlight flares per plow (Points, positions/colours set per frame)
+      this.plowGlowLocal = [beaconAt, ...heads].map(a => new THREE.Vector3(...a).add(new THREE.Vector3(0, 0, 0.12)));
+      const pts = (count, size) => {
+        const g = new THREE.BufferGeometry();
+        g.setAttribute('position', new THREE.BufferAttribute(new Float32Array(count * 3), 3));
+        g.setAttribute('color', new THREE.BufferAttribute(new Float32Array(count * 3), 3));
+        const m = new THREE.PointsMaterial({ size, map: glowTexture(), vertexColors: true, transparent: true, depthWrite: false, blending: THREE.AdditiveBlending, sizeAttenuation: true, fog: false });
+        m.userData.sharedMaps = true;
+        const o = this.add(new THREE.Points(g, m)); o.frustumCulled = false; o.renderOrder = 2; return o;
+      };
+      this.plowHalo = pts(n, 1.3); this.plowGlow = pts(n * 2, 2.4);
+      // headlight pools on the snow ahead of each plow
+      const pg = new THREE.PlaneGeometry(4.2, 7.5).rotateX(-Math.PI / 2); pg.translate(0, 0.06, 2.9 + 3.6);
+      const pm = new THREE.MeshBasicMaterial({ map: glowTexture(), color: 0xffd9a0, transparent: true, opacity: 0.42, depthWrite: false, blending: THREE.AdditiveBlending, polygonOffset: true, polygonOffsetFactor: -4 });
+      pm.userData.sharedMaps = true;
+      this.plowPools = this.add(new THREE.InstancedMesh(pg, pm, n)); this.plowPools.frustumCulled = false;
       for (const p of plan.plows) this.plows.push({ ...p, road: W.roads[p.ri], s: p.s, x: 0, z: 0, yaw: 0, honkT: 0 });
     }
     // ---- rolling snowballs (instanced spheres)
@@ -368,7 +402,11 @@ export class Obstacles {
       const want = Math.atan2(A.tx * P.dir, A.tz * P.dir); P.yaw = P.yaw + Math.atan2(Math.sin(want - P.yaw), Math.cos(want - P.yaw)) * (1 - Math.exp(-6 * dt));
       const y = this.surf(P.x, P.z);
       q.setFromAxisAngle(v.set(0, 1, 0), P.yaw); m4.compose(v.set(P.x, y, P.z), q, sc.set(1, 1, 1));
-      this.plowMesh.setMatrixAt(i, m4); this.plowBeacon.setMatrixAt(i, m4);
+      for (const im of this.plowParts) im.setMatrixAt(i, m4);
+      this.plowBeacon.setMatrixAt(i, m4); this.plowPools.setMatrixAt(i, m4);
+      { const on = Math.sin(t * 9) > 0 ? 0.8 : 0.06, hp = this.plowHalo.geometry.attributes, gp = this.plowGlow.geometry.attributes;
+        v.copy(this.plowGlowLocal[0]).applyMatrix4(m4); hp.position.setXYZ(i, v.x, v.y, v.z); hp.color.setXYZ(i, on, 0.45 * on, 0.05 * on);
+        for (let k = 0; k < 2; k++) { v.copy(this.plowGlowLocal[k + 1]).applyMatrix4(m4); gp.position.setXYZ(i * 2 + k, v.x, v.y, v.z); gp.color.setXYZ(i * 2 + k, 0.85, 0.72, 0.5); } }
       if (!playing) continue;
       const dx = p.x - P.x, dz = p.z - P.z, c = Math.cos(P.yaw), s = Math.sin(P.yaw);
       const lx = dx * c - dz * s, lz = dx * s + dz * c; // local: z forward, x right
@@ -379,7 +417,11 @@ export class Obstacles {
         this.onHit('plow', { nx: c * side + Math.sin(P.yaw) * 0.6, nz: -s * side + Math.cos(P.yaw) * 0.6, steal: O.plow.steal, msg: 'Plowed!' });
       }
     }
-    if (this.plowMesh) { this.plowMesh.instanceMatrix.needsUpdate = true; this.plowBeacon.instanceMatrix.needsUpdate = true; }
+    if (this.plowMesh) {
+      for (const im of this.plowParts) im.instanceMatrix.needsUpdate = true;
+      this.plowBeacon.instanceMatrix.needsUpdate = true; this.plowPools.instanceMatrix.needsUpdate = true;
+      for (const o of [this.plowHalo, this.plowGlow]) { o.geometry.attributes.position.needsUpdate = true; o.geometry.attributes.color.needsUpdate = true; }
+    }
     // --- snowballs: roll from the outer end of a main street down to the square, then start again
     for (let i = 0; i < this.balls.length; i++) {
       const b = this.balls[i], pts = b.road.pts, n = pts.length;

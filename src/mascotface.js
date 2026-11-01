@@ -7,7 +7,7 @@
 //   - the mouth below.
 // Every expression is a set of numbers, so changes blend smoothly and blinking is just eye openness.
 import * as THREE from 'three';
-import { ICON_BLACK_D } from './logo.js?v=731ffe7a';
+import { ICON_BLACK_D } from './logo.js?v=5361c3f3';
 
 // eye (SVG units of the 900x492 icon): w,h = scale of the dark eye oval · tilt (rad, + = outer corner up)
 //      brow = top edge cut, sloping down toward the nose (determined/cross) · squint = cheek pushed up from below (happy ^ ^)

@@ -4,8 +4,8 @@ import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 import { KTX2Loader } from 'three/addons/loaders/KTX2Loader.js';
 import { MeshoptDecoder } from 'three/addons/libs/meshopt_decoder.module.js';
 import * as SkeletonUtils from 'three/addons/utils/SkeletonUtils.js';
-import { MANIFEST } from '../assets/manifest.js?v=731ffe7a';
-import { CONFIG } from './config.js?v=731ffe7a';
+import { MANIFEST } from '../assets/manifest.js?v=5361c3f3';
+import { CONFIG } from './config.js?v=5361c3f3';
 
 // Tripo GLBs are meshopt-compressed with KTX2 (UASTC/ETC1S) textures.
 const loader = new GLTFLoader();
@@ -100,14 +100,15 @@ export function findClip(animations, wanted) {
 export { MANIFEST };
 
 /** Instantiate an entry and return its meshes with transforms baked (LOD1 skipped) — for InstancedMesh use. */
-export function bakedMeshes(entry) {
+export function bakedMeshes(entry, { lod = 0 } = {}) {
   const inst = instantiate(entry);
   if (!inst) return null;
   inst.object.updateMatrixWorld(true);
+  const skip = lod === 1 && inst.object.getObjectByName('LOD1') ? 'LOD0' : 'LOD1'; // lod 1 = lighter mesh when the GLB has one
   const out = [];
   inst.object.traverse(o => {
     if (!o.isMesh) return;
-    for (let p = o; p; p = p.parent) if (p.name === 'LOD1') return;
+    for (let p = o; p; p = p.parent) if (p.name === skip) return;
     const g = dequantize(o.geometry.clone()); g.applyMatrix4(o.matrixWorld);
     out.push({ geometry: g, material: o.material });
   });
