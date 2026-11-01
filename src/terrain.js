@@ -3,9 +3,9 @@
 // and footprint trails pressed into it. Exposes heightAt(x, z) so Santa, footprints and props sit on it.
 import * as THREE from 'three';
 import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
-import { CONFIG } from './config.js?v=1d9e3a63';
-import { cloneTex } from './materials.js?v=1d9e3a63';
-import { fbm, vnoise, hash2, sstep, snowSparkle } from './xmasdeco.js?v=1d9e3a63';
+import { CONFIG } from './config.js?v=731ffe7a';
+import { cloneTex } from './materials.js?v=731ffe7a';
+import { fbm, vnoise, hash2, sstep, snowSparkle } from './xmasdeco.js?v=731ffe7a';
 
 const W = CONFIG.world;
 const WIND = new THREE.Vector2(0.8, 0.6).normalize();

@@ -121,8 +121,8 @@ export const CONFIG = {
     // real jump (Space / JUMP button): clears the snowy picket fences, benches, sleds, snow banks; walls stay solid
     jump: { velocity: 8.2, gravity: 22, coyoteTime: 0.12, bufferTime: 0.14, // apex = v^2/2g ~ 1.53 m
       fenceHeight: 1.0, benchHeight: 0.85, lowPropHeight: 0.5 }, // collider tops (m): feet above the top pass over
-    // touch auto-sprint: joystick pushed past radiusFrac of its radius, or a direction held holdTime seconds
-    autoSprint: { radiusFrac: 0.85, holdTime: 1.2, rampTime: 0.55, keyboardHold: false },
+    // auto-sprint (all devices alike): stick / keys pushed past radiusFrac of full input, or a direction held holdTime seconds
+    autoSprint: { radiusFrac: 0.85, holdTime: 1.2, rampTime: 0.55 },
   },
 
   camera: {

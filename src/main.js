@@ -1,27 +1,27 @@
 // Santa's Block Delivery — game bootstrap, loop and state machine.
 import * as THREE from 'three';
-import { PostFX, loadEnvironment, LampCones, Footprints, SnowPuffs, ChimneySmoke, Sparkles, Shockwaves, Governor } from './fx.js?v=1d9e3a63';
-import { CONFIG, applyUrlOverrides, resolveQuality, difficulty, ethPerBlock, formatEth, comboMult, fmt } from './config.js?v=1d9e3a63';
-import { initAssets } from './assets.js?v=1d9e3a63';
-import { World } from './world.js?v=1d9e3a63';
-import { Interiors } from './interiors.js?v=1d9e3a63';
-import { PineSystem } from './pines.js?v=1d9e3a63';
-import { createSanta } from './santa.js?v=1d9e3a63';
-import { Input } from './input.js?v=1d9e3a63';
-import { HUD } from './hud.js?v=1d9e3a63';
-import { Snow, Particles, Flights, Fireworks } from './effects.js?v=1d9e3a63';
-import { makeLogoMesh, logoSVG } from './logo.js?v=1d9e3a63';
-import { WINDOW_WARM, WINDOW_BLUE } from './materials.js?v=1d9e3a63';
-import { InstanceCuller } from './lowcull.js?v=1d9e3a63';
-import { initAudio, resumeAudio, sfx, music, audioState, configureAudio, audioStatus, renderEndingOffline } from './audio.js?v=1d9e3a63';
-import { progress, starsFor, titleFor } from './progress.js?v=1d9e3a63';
-import { drawScoreCard, showCardUI, hideCardUI } from './scorecard.js?v=1d9e3a63';
-import { cosmetics, SLOTS, ITEMS, BY_ID } from './cosmetics.js?v=1d9e3a63';
-import { applyLook, Trail } from './costume.js?v=1d9e3a63';
-import { createLeaderboard, NAME_MAX } from './leaderboard.js?v=1d9e3a63';
-import { Obstacles, planStage, routeCheck } from './obstacles.js?v=1d9e3a63';
-import { RouteGraph } from './routegraph.js?v=1d9e3a63';
-import { rng, clamp, lerp, damp, angleDamp, angleDiff, glowTexture, textTexture, worldUV } from './util.js?v=1d9e3a63';
+import { PostFX, loadEnvironment, LampCones, Footprints, SnowPuffs, ChimneySmoke, Sparkles, Shockwaves, Governor } from './fx.js?v=731ffe7a';
+import { CONFIG, applyUrlOverrides, resolveQuality, difficulty, ethPerBlock, formatEth, comboMult, fmt } from './config.js?v=731ffe7a';
+import { initAssets } from './assets.js?v=731ffe7a';
+import { World } from './world.js?v=731ffe7a';
+import { Interiors } from './interiors.js?v=731ffe7a';
+import { PineSystem } from './pines.js?v=731ffe7a';
+import { createSanta } from './santa.js?v=731ffe7a';
+import { Input } from './input.js?v=731ffe7a';
+import { HUD } from './hud.js?v=731ffe7a';
+import { Snow, Particles, Flights, Fireworks } from './effects.js?v=731ffe7a';
+import { makeLogoMesh, logoSVG } from './logo.js?v=731ffe7a';
+import { WINDOW_WARM, WINDOW_BLUE } from './materials.js?v=731ffe7a';
+import { InstanceCuller } from './lowcull.js?v=731ffe7a';
+import { initAudio, resumeAudio, sfx, music, audioState, configureAudio, audioStatus, renderEndingOffline } from './audio.js?v=731ffe7a';
+import { progress, starsFor, titleFor } from './progress.js?v=731ffe7a';
+import { drawScoreCard, showCardUI, hideCardUI } from './scorecard.js?v=731ffe7a';
+import { cosmetics, SLOTS, ITEMS, BY_ID } from './cosmetics.js?v=731ffe7a';
+import { applyLook, Trail } from './costume.js?v=731ffe7a';
+import { createLeaderboard, NAME_MAX } from './leaderboard.js?v=731ffe7a';
+import { Obstacles, planStage, routeCheck } from './obstacles.js?v=731ffe7a';
+import { RouteGraph } from './routegraph.js?v=731ffe7a';
+import { rng, clamp, lerp, damp, angleDamp, angleDiff, glowTexture, textTexture, worldUV } from './util.js?v=731ffe7a';
 
 applyUrlOverrides();
 const params = new URLSearchParams(location.search);
@@ -185,7 +185,7 @@ const G = {
   gossipBusy: false, hint: '', endingT: 0, lastTick: 0, levelObjects: [],
   combo: 0, bestCombo: 0, lastDeliverT: -1e9, boosted: 0, totalBoosted: 0,
 };
-import { Nav } from './nav.js?v=1d9e3a63';
+import { Nav } from './nav.js?v=731ffe7a';
 const _dbs = new THREE.Vector2();
 const player = { pos: new THREE.Vector3(), vel: new THREE.Vector3(), heading: 0, speed: 0, jy: 0, vy: 0, air: false, coyote: 0, jumpBuf: 0, sprintK: 0, holdT: 0, surfY: 0, paved: false };
 const cam = { yaw: 0, pos: new THREE.Vector3(), look: new THREE.Vector3(), dist: CONFIG.camera.distance };
@@ -777,7 +777,9 @@ function updatePlayer(dt) {
   // sprint: Shift (desktop) or touch auto-sprint (joystick pushed past radiusFrac, or a direction held holdTime s); smooth ramp
   const mag = Math.hypot(ax.x, ax.y);
   player.holdT = mag > 0.35 ? player.holdT + dt : 0;
-  const wantSprint = input.sprint || (input.joy.active && (mag >= AS.radiusFrac || player.holdT >= AS.holdTime)) || (AS.keyboardHold && player.holdT >= AS.holdTime);
+  // same rule for every device: Shift, or a direction pushed past radiusFrac / held holdTime s. Touch used to auto-sprint
+  // while keyboard needed Shift, so the iPhone ran at sprint speed (11.5) where the Mac walked (6.5).
+  const wantSprint = input.sprint || (mag > 0.05 && (mag >= AS.radiusFrac || player.holdT >= AS.holdTime));
   player.sprintK = THREE.MathUtils.clamp(player.sprintK + (wantSprint ? dt : -dt * 2) / AS.rampTime, 0, 1);
   const sprint = player.sprintK > 0.5;
   const fx = Math.sin(cam.yaw), fz = Math.cos(cam.yaw); // camera forward
@@ -1463,10 +1465,17 @@ function loop() {
   perfCtl(d); debugOverlay(d);
   // rAF timestamps jitter by +-1-2 ms (more on 120 Hz ProMotion / vsync-off Macs). Feeding raw dt makes motion
   // visibly uneven at ~80 fps; a light EMA that snaps on real changes keeps speed exact over time but smooth.
-  const dc = Math.min(0.05, d);
+  // No slow-motion clamp: low fps (old phones, throttled tabs) used to be capped at 50 ms per frame, so below 20 fps the game
+  // ran slower than real time. Long frames are now split into <= 1/30 s simulation substeps (render only on the last),
+  // so distance per second is identical at 20/30/60/120 Hz. Only a real stall (> 0.2 s, e.g. tab switch) is dropped.
+  const dc = Math.min(0.2, d);
   sdt = Math.abs(dc - sdt) > sdt * 0.5 ? dc : sdt + (dc - sdt) * 0.3;
-  frame(QA_FIXED ? 1 / 30 : sdt);
+  if (QA_FIXED) { frame(1 / 30); return; }
+  const n = Math.max(1, Math.ceil(sdt / SUBSTEP - 1e-6)), h = sdt / n;
+  if (n > 1) { simOnly = true; try { for (let i = 1; i < n; i++) frame(h); } finally { simOnly = false; } }
+  frame(h);
 }
+const SUBSTEP = 1 / 30;
 function frame(dt) {
   t += dt;
   const playing = G.state === 'playing';
@@ -1554,10 +1563,10 @@ function debugAPI() {
     G, player, CONFIG, renderer, world, santa, scene, camera, post, get hud() { return hud; }, get nav() { return nav; },
     get state() { return G.state; },
     cosmetics, progress, showUnlocks, openWardrobe, closeWardrobe, WD, lb, openBoard, closeBoard, tryLook: (ids) => { const L = cosmetics.look(); for (const id of ids) { const it = BY_ID[id]; L[it.slot] = it; } applyLook(santa, L); return Object.values(L).map(i => i.id); },
-    resolveWindows: async (rects) => { const { resolveWindows } = await import('./interiors.js?v=1d9e3a63'); const out = {}; for (const b of world.buildings) { if (!b.isGLB || out[b.type] || !rects[b.type]) continue; out[b.type] = resolveWindows(b.holder.children[0], b.holder, rects[b.type]); } return out; },
-    facadeShots: async (side = 0, mask = false) => { const { facadeShot } = await import('./interiors.js?v=1d9e3a63'); const out = {}; for (const b of world.buildings) { if (!b.isGLB || out[b.type]) continue; out[b.type] = facadeShot(b.holder.children[0], b.holder, renderer, side, 48, mask); } return out; },
+    resolveWindows: async (rects) => { const { resolveWindows } = await import('./interiors.js?v=731ffe7a'); const out = {}; for (const b of world.buildings) { if (!b.isGLB || out[b.type] || !rects[b.type]) continue; out[b.type] = resolveWindows(b.holder.children[0], b.holder, rects[b.type]); } return out; },
+    facadeShots: async (side = 0, mask = false) => { const { facadeShot } = await import('./interiors.js?v=731ffe7a'); const out = {}; for (const b of world.buildings) { if (!b.isGLB || out[b.type]) continue; out[b.type] = facadeShot(b.holder.children[0], b.holder, renderer, side, 48, mask); } return out; },
     // dev: detect lit window rects on each Tripo building type (output -> assets/windows.js)
-    detectWindows: async () => { const { detectWindows } = await import('./interiors.js?v=1d9e3a63'); const out = {}; for (const b of world.buildings) { if (!b.isGLB || out[b.type]) continue; const o = b.holder.children[0]; out[b.type] = detectWindows(o, b.holder, renderer); } return out; },
+    detectWindows: async () => { const { detectWindows } = await import('./interiors.js?v=731ffe7a'); const out = {}; for (const b of world.buildings) { if (!b.isGLB || out[b.type]) continue; const o = b.holder.children[0]; out[b.type] = detectWindows(o, b.holder, renderer); } return out; },
     start: (lv = 0) => { G.qaMute = true; initAudio(false); startLevel(lv); },
     // stage beatability: road-graph route estimate vs timer for one stage (i) or all of them
     routeCheck: (i = null) => { const sp = spawnPoint(); const one = k => routeCheck(graph, planStage(world, graph, k, sp), sp); return i == null ? CONFIG.levels.map((_, k) => one(k)) : one(i); },

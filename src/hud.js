@@ -1,6 +1,6 @@
 // DOM HUD: score, Gossip vs Optimum comparison, timer, minimap, power-up status.
-import { CONFIG, formatEth, fmt } from './config.js?v=1d9e3a63';
-import { logoSVG } from './logo.js?v=1d9e3a63';
+import { CONFIG, formatEth, fmt } from './config.js?v=731ffe7a';
+import { logoSVG } from './logo.js?v=731ffe7a';
 
 const $ = id => document.getElementById(id);
 
