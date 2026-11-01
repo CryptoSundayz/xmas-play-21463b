@@ -7,7 +7,7 @@
 //   - the mouth below.
 // Every expression is a set of numbers, so changes blend smoothly and blinking is just eye openness.
 import * as THREE from 'three';
-import { ICON_BLACK_D } from './logo.js?v=9e6ba718';
+import { ICON_BLACK_D } from './logo.js?v=1d9e3a63';
 
 // eye (SVG units of the 900x492 icon): w,h = scale of the dark eye oval · tilt (rad, + = outer corner up)
 //      brow = top edge cut, sloping down toward the nose (determined/cross) · squint = cheek pushed up from below (happy ^ ^)
@@ -48,8 +48,10 @@ export class MascotFace {
     this.cur = JSON.parse(JSON.stringify(FACES.neutral)); this.target = 'neutral'; this.name = 'neutral';
     this.blink = 0; this.blinkT = 2.5; this.blinkPh = -1; this.dirty = true; this.mix = 1;
     this.blinkEvery = [2.2, 5.0];
+    this.lens = null; // goggle lens tint {tint, sheen, rim} or null (default Optimum: clear)
     this.draw();
   }
+  setLens(l) { const k = l ? l.tint + l.sheen + l.rim : ''; if (k === this.lensKey) return; this.lensKey = k; this.lens = l || null; this.dirty = true; this.draw(); this.dirty = false; }
   set(name) { if (!FACES[name] || name === this.target) return; this.target = name; this.mix = 0; }
   update(dt) {
     if (this.mix < 1) {
@@ -103,6 +105,14 @@ export class MascotFace {
           ctx.beginPath(); ctx.moveTo(side * ew * 1.6, yo); ctx.lineTo(-side * ew * 1.6, yi); ctx.lineTo(-side * ew * 1.6, -eh * 3); ctx.lineTo(side * ew * 1.6, -eh * 3); ctx.closePath(); ctx.fill();
         }
         ctx.restore();
+      }
+      const Ln = this.lens;
+      if (Ln) { // tinted lens over the eyes: colour wash, diagonal sheen, coloured inner rim
+        ctx.fillStyle = Ln.tint; ctx.fillRect(0, 0, 900, 520);
+        const sg = ctx.createLinearGradient(117, 90, 560, 402);
+        sg.addColorStop(0, Ln.sheen); sg.addColorStop(0.22, Ln.sheen); sg.addColorStop(0.4, 'rgba(255,255,255,0)'); sg.addColorStop(1, 'rgba(255,255,255,0)');
+        ctx.fillStyle = sg; ctx.fillRect(0, 0, 900, 520);
+        ctx.strokeStyle = Ln.rim; ctx.lineWidth = 34; ctx.stroke(HOLE_PATH);
       }
       ctx.restore();
     }

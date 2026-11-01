@@ -14,10 +14,17 @@ const FLAMES = { // linear RGB: deep, body, core, embers; light = sRGB hex
 };
 const GOGGLES = { // color, metalness, roughness, env (IBL scale), emissive, emissiveIntensity
   obsidian: [0x030304, 0, 0.3, 0.22, 0x000000, 0],
-  chrome: [0xdfe5ec, 1, 0.13, 1.0, 0x1a1d22, 1],
+  chrome: [0xe8edf3, 0.7, 0.16, 1.0, 0x5c6470, 1],
   ice: [0x8fd2ff, 0.15, 0.05, 0.7, 0x0b3a5c, 1],
   neon: [0x0a2cff, 0, 0.22, 0.3, 0x1d5bff, 1.1],
   gold: [0xffc24a, 1, 0.2, 1.0, 0x3a2400, 1],
+};
+// lens look painted into the face decal's hollow (over the eyes): tint wash, sheen, inner rim. obsidian = clear (unchanged default)
+const LENSES = {
+  chrome: { tint: 'rgba(55,72,95,0.72)', sheen: 'rgba(255,255,255,0.6)', rim: 'rgba(235,242,250,0.95)' },
+  ice: { tint: 'rgba(70,185,255,0.58)', sheen: 'rgba(235,250,255,0.6)', rim: 'rgba(160,225,255,0.95)' },
+  neon: { tint: 'rgba(20,60,255,0.6)', sheen: 'rgba(170,200,255,0.45)', rim: 'rgba(70,140,255,1)' },
+  gold: { tint: 'rgba(255,145,0,0.62)', sheen: 'rgba(255,240,200,0.55)', rim: 'rgba(255,205,90,0.95)' },
 };
 
 // ---- procedural geometry helpers (all merged into one vertex-coloured geometry per item)
@@ -120,7 +127,19 @@ export function applyLook(santa, look) {
   U.uC0.value.setRGB(...F[0]); U.uC1.value.setRGB(...F[1]); U.uC2.value.setRGB(...F[2]); U.uEC.value.setRGB(...F[3]); U.uPrism.value = it('flame').fl === 'prism' ? 1 : 0; U.uFlameOn.value = it('flame').fl && it('flame').fl !== 'icy' ? 1 : 0;
   santa.flameLight?.color.setHex(F[4]);
   const G = GOGGLES[it('goggles').gg] || GOGGLES.obsidian, gm = santa.goggle?.material;
-  if (gm) { gm.color.setHex(G[0]); gm.metalness = G[1]; gm.roughness = G[2]; U.uEnvK.value = G[3]; gm.emissive.setHex(G[4]); gm.emissiveIntensity = G[5]; }
+  if (gm) {
+    gm.color.setHex(G[0]); gm.metalness = G[1]; gm.roughness = G[2]; U.uEnvK.value = G[3]; gm.emissive.setHex(G[4]); gm.emissiveIntensity = G[5];
+    // The face decal (transparent pass, paints the black icon backing) used to cover the opaque frame, so every goggle looked
+    // like the default black mask. Non-default frames move to the transparent pass (opacity 1, depth write on), where
+    // renderOrder 3 draws them after the decal (renderOrder 2). Obsidian keeps the original opaque path = identical default look.
+    const show = G !== GOGGLES.obsidian;
+    if (gm.transparent !== show) {
+      gm.transparent = show; gm.depthWrite = true; gm.opacity = 1; gm.needsUpdate = true;
+      // the frame front sits only a few mm over the rest-pose head; pull it toward the camera so the posed skin can't streak through
+      gm.polygonOffset = show; gm.polygonOffsetFactor = -2; gm.polygonOffsetUnits = -600;
+    }
+  }
+  santa.face?.setLens?.(LENSES[it('goggles').gg] || null);
   const slot = (name, kind, build) => {
     const S = santa.slots?.[name]; if (!S) return;
     const cur = S.children[0];
