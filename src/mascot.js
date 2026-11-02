@@ -7,10 +7,10 @@
 //  - fur shells on the cream trim, velvet sheen on the red cloth
 import * as THREE from 'three';
 import { DecalGeometry } from 'three/addons/geometries/DecalGeometry.js';
-import { CONFIG } from './config.js?v=77728b1a';
-import { findClip } from './assets.js?v=77728b1a';
-import { MascotFace } from './mascotface.js?v=77728b1a';
-import { iconBlackShapes } from './logo.js?v=77728b1a';
+import { CONFIG } from './config.js?v=41faccfa';
+import { findClip } from './assets.js?v=41faccfa';
+import { MascotFace } from './mascotface.js?v=41faccfa';
+import { iconBlackShapes } from './logo.js?v=41faccfa';
 import { mergeVertices } from 'three/addons/utils/BufferGeometryUtils.js';
 
 /** Goggle mesh in root-local space: the official dark icon (outer contour + hollow centre) extruded with a rounded

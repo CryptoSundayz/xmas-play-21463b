@@ -1,32 +1,37 @@
 // Santa's Block Delivery — game bootstrap, loop and state machine.
 import * as THREE from 'three';
-import { PostFX, loadEnvironment, LampCones, Footprints, SnowPuffs, ChimneySmoke, Sparkles, Shockwaves, Governor } from './fx.js?v=77728b1a';
-import { CONFIG, applyUrlOverrides, resolveQuality, difficulty, ethPerBlock, formatEth, comboMult, fmt } from './config.js?v=77728b1a';
-import { initAssets } from './assets.js?v=77728b1a';
-import { World } from './world.js?v=77728b1a';
-import { Interiors } from './interiors.js?v=77728b1a';
-import { PineSystem } from './pines.js?v=77728b1a';
-import { createSanta } from './santa.js?v=77728b1a';
-import { Input } from './input.js?v=77728b1a';
-import { HUD } from './hud.js?v=77728b1a';
-import { Snow, Particles, Flights, Fireworks } from './effects.js?v=77728b1a';
-import { makeLogoMesh, logoSVG } from './logo.js?v=77728b1a';
-import { WINDOW_WARM, WINDOW_BLUE } from './materials.js?v=77728b1a';
-import { InstanceCuller } from './lowcull.js?v=77728b1a';
-import { DynRes } from './dynres.js?v=77728b1a';
-import { initAudio, resumeAudio, sfx, music, audioState, configureAudio, audioStatus, renderEndingOffline } from './audio.js?v=77728b1a';
-import { progress, starsFor, titleFor } from './progress.js?v=77728b1a';
-import { drawScoreCard, showCardUI, hideCardUI } from './scorecard.js?v=77728b1a';
-import { cosmetics, SLOTS, ITEMS, BY_ID } from './cosmetics.js?v=77728b1a';
-import { applyLook, Trail } from './costume.js?v=77728b1a';
-import { createLeaderboard, NAME_MAX } from './leaderboard.js?v=77728b1a';
-import { Obstacles, planStage, routeCheck } from './obstacles.js?v=77728b1a';
-import { RouteGraph } from './routegraph.js?v=77728b1a';
-import { rng, clamp, lerp, damp, angleDamp, angleDiff, glowTexture, textTexture, worldUV } from './util.js?v=77728b1a';
+import { PostFX, loadEnvironment, LampCones, Footprints, SnowPuffs, ChimneySmoke, Sparkles, Shockwaves, Governor } from './fx.js?v=41faccfa';
+import { CONFIG, applyUrlOverrides, resolveQuality, difficulty, ethPerBlock, formatEth, comboMult, fmt } from './config.js?v=41faccfa';
+import { initAssets } from './assets.js?v=41faccfa';
+import { World } from './world.js?v=41faccfa';
+import { Interiors } from './interiors.js?v=41faccfa';
+import { PineSystem } from './pines.js?v=41faccfa';
+import { createSanta } from './santa.js?v=41faccfa';
+import { Input } from './input.js?v=41faccfa';
+import { HUD } from './hud.js?v=41faccfa';
+import { Snow, Particles, Flights, Fireworks } from './effects.js?v=41faccfa';
+import { makeLogoMesh, logoSVG } from './logo.js?v=41faccfa';
+import { WINDOW_WARM, WINDOW_BLUE } from './materials.js?v=41faccfa';
+import { InstanceCuller } from './lowcull.js?v=41faccfa';
+import { DynRes } from './dynres.js?v=41faccfa';
+import { initAudio, resumeAudio, sfx, music, audioState, configureAudio, audioStatus, renderEndingOffline } from './audio.js?v=41faccfa';
+import { progress, starsFor, titleFor } from './progress.js?v=41faccfa';
+import { drawScoreCard, showCardUI, hideCardUI } from './scorecard.js?v=41faccfa';
+import { cosmetics, SLOTS, ITEMS, BY_ID } from './cosmetics.js?v=41faccfa';
+import { applyLook, Trail } from './costume.js?v=41faccfa';
+import { createLeaderboard, NAME_MAX } from './leaderboard.js?v=41faccfa';
+import { Obstacles, planStage, routeCheck } from './obstacles.js?v=41faccfa';
+import { RouteGraph } from './routegraph.js?v=41faccfa';
+import { rng, clamp, lerp, damp, angleDamp, angleDiff, glowTexture, textTexture, worldUV } from './util.js?v=41faccfa';
 
 applyUrlOverrides();
 const params = new URLSearchParams(location.search);
 const Q = resolveQuality();
+// touch only: exp2 fog begins CONFIG.mobileLook.fogStart m from the camera (patched before any shader compiles, so
+// every built-in material picks it up; desktop keeps three's stock fog chunk byte for byte)
+const ML = Q.mobile ? CONFIG.mobileLook : null;
+if (ML?.fogStart > 0) THREE.ShaderChunk.fog_fragment = THREE.ShaderChunk.fog_fragment.replace(
+  'fogDensity * fogDensity * vFogDepth * vFogDepth', `fogDensity * fogDensity * max( vFogDepth - ${ML.fogStart.toFixed(2)}, 0.0 ) * max( vFogDepth - ${ML.fogStart.toFixed(2)}, 0.0 )`);
 const QA_FIXED_EARLY = !!params.get('qa');
 const DEBUG = params.get('debug') === '1';
 const B = CONFIG.branding;
@@ -104,7 +109,7 @@ for (let i = 0; i < Q.lights; i++) { const l = new THREE.PointLight(0xffaa66, 0,
 // post stack: [GTAO] -> bloom -> output (tone map) -> DOF + grade + vignette + grain
 const post = new PostFX(renderer, scene, camera, Q, CONFIG.bloom, LOOK);
 const bloom = post.bloom;
-post.weatherPost = CONFIG.weather.post;
+post.weatherPost = ML ? ML.post : CONFIG.weather.post; // touch: tighter / weaker bloom (CONFIG.mobileLook.post)
 if (!Q.grade) document.body.classList.add('cssVignette');
 let _sizeKey = '';
 function applySize(force = false) {
@@ -191,7 +196,7 @@ const G = {
   gossipBusy: false, hint: '', endingT: 0, lastTick: 0, levelObjects: [],
   combo: 0, bestCombo: 0, lastDeliverT: -1e9, boosted: 0, totalBoosted: 0,
 };
-import { Nav } from './nav.js?v=77728b1a';
+import { Nav } from './nav.js?v=41faccfa';
 const _dbs = new THREE.Vector2();
 const player = { pos: new THREE.Vector3(), vel: new THREE.Vector3(), heading: 0, speed: 0, jy: 0, vy: 0, air: false, coyote: 0, jumpBuf: 0, sprintK: 0, holdT: 0, surfY: 0, paved: false };
 const cam = { yaw: 0, pos: new THREE.Vector3(), look: new THREE.Vector3(), dist: CONFIG.camera.distance };
@@ -233,11 +238,16 @@ async function boot() {
   graph = new RouteGraph(world.roads, CONFIG.world.squareRadius);
   obstacles = new Obstacles(scene, world, { onHit: hitPlayer, onEvent: obstacleEvent });
   // layered snow: main fall, far fine dust, near soft "bokeh" flakes
-  snow = new Snow(scene, Q.snowCount);
+  const MS = ML?.snow ?? null; // touch: screen-scaled flake size + longer near fade (CONFIG.mobileLook.snow)
+  snow = new Snow(scene, Q.snowCount, { mobile: MS });
   fxs.snowLayers = [];
-  if (Q.snowLayers > 1) fxs.snowLayers.push({ s: new Snow(scene, Math.round(Q.snowCount * 0.8), { box: 170, h: 70, size: 0.1, opacity: 0.55, speed: 0.7 }), near: false });
-  if (Q.snowLayers > 2) fxs.snowLayers.push({ s: new Snow(scene, 140, { box: 18, h: 12, size: 0.3, opacity: 0.22, speed: 0.55, soft: 1 }), near: true });
-  if (Q.shafts) fxs.cones = new LampCones(scene, world.lightCandidates.filter(l => l.lamp), LOOK.lampShaftIntensity);
+  if (Q.snowLayers > 1) fxs.snowLayers.push({ s: new Snow(scene, Math.round(Q.snowCount * 0.8), { box: 170, h: 70, size: 0.1, opacity: 0.55, speed: 0.7, mobile: MS }), near: false });
+  if (Q.snowLayers > 2) fxs.snowLayers.push({ s: new Snow(scene, 140, { box: 18, h: 12, size: 0.3, opacity: 0.22 * (MS?.nearLayerOpacity ?? 1), speed: 0.55, soft: 1, mobile: MS }), near: true });
+  if (ML?.glow) { const g = ML.glow; // touch: softer additive lamp glow (CONFIG.mobileLook.glow)
+    if (world.lampPools) world.lampPools.material.opacity *= g.lampPools;
+    if (world.doorPools) world.doorPools.material.opacity *= g.doorPools;
+    if (world.lampHalos) { world.lampHalos.material.opacity *= g.halos; world.lampHalos.userData.size0 = world.lampHalos.material.size; } }
+  if (Q.shafts) fxs.cones = new LampCones(scene, world.lightCandidates.filter(l => l.lamp), LOOK.lampShaftIntensity * (ML?.lampShafts ?? 1));
   if (Q.smoke) { const src = world.buildings.filter(b => b.chimney).map(b => b.chimney); if (src.length) fxs.smoke = new ChimneySmoke(scene, src, Q.name === 'high' ? 24 : 16); }
   if (Q.footprints) fxs.feet = new Footprints(scene, 240);
   if (fxs.feet) fxs.feet.heightAt = world.heightAt;
@@ -1164,7 +1174,7 @@ function updateStorm(dt) {
   } else { G.storm = damp(G.storm, 0, 1.0, dt); G.stormLin = G.storm; }
   const st = G.storm;
   G.weather = { fog: lerp(G.wx.fog, S.fog, Math.pow(st, 1.3)), snow: lerp(G.wx.snow, S.snow, st), wind: lerp(G.wx.wind, S.wind, st), fall: lerp(G.wx.fall, S.fall, st) };
-  scene.fog.density = Math.max(G.weather.fog, lowApplied ? (CONFIG.qualityPresets.low.fogMin ?? 0) : 0);
+  scene.fog.density = Math.max(G.weather.fog, lowApplied ? ((ML?.lowFogMin ?? CONFIG.qualityPresets.low.fogMin) ?? 0) : 0);
   scene.fog.color.copy(FOG_COLOR).lerp(STORM_FOG, st); scene.background.copy(scene.fog.color);
   world.sky.material.uniforms.uStorm && (world.sky.material.uniforms.uStorm.value = st);
   G.wxDark = damp(G.wxDark ?? 0, P.dark || 0, 1.5, dt); // night / blizzard stages: dimmer ambient + darker fog
@@ -1561,7 +1571,7 @@ function frame(dt) {
     if (obstacles.gust.k > 0 && G.weather) G.weather.wind = Math.min(1.4, G.weather.wind + obstacles.gust.k * 0.9);
     world.update(dt, t);
     interiors?.update(t);
-    if (world.bulbMat) { const u = world.bulbMat.uniforms; u.uTime.value = t; u.uFog.value = scene.fog?.density ?? 0;
+    if (world.bulbMat) { const u = world.bulbMat.uniforms; u.uTime.value = t; u.uFog.value = scene.fog?.density ?? 0; u.uFogStart.value = ML?.fogStart ?? 0;
       u.uPx.value = renderer.getDrawingBufferSize(_dbs).y / (2 * Math.tan(THREE.MathUtils.degToRad(camera.fov) / 2)); }
     pines?.update(camera.position, dt, false, G.state === 'playing' ? { x0: camera.position.x, z0: camera.position.z, x1: player.pos.x, z1: player.pos.z } : null);
     flights.update(dt);
@@ -1586,6 +1596,8 @@ function frame(dt) {
   const focus = G.state === 'playing' || G.state === 'paused' || G.state === 'levelComplete' || G.state === 'gameOver' ? player.pos : _ORIGIN;
   if (!simOnly) updateShadow(focus); // render-only state: skipped on sim-only substeps
   if (G.wardrobe && G.state === 'title') wardrobeLights(true); else if (WL.on) wardrobeLights(false);
+  if (ML?.glow?.haloFovComp && world.lampHalos) world.lampHalos.material.size = world.lampHalos.userData.size0 * Math.min(1, Math.tan(THREE.MathUtils.degToRad(CONFIG.camera.fov) / 2) / Math.tan(THREE.MathUtils.degToRad(camera.fov) / 2));
+  if (ML) Snow.proj = renderer.getDrawingBufferSize(_dbs).y / (2 * Math.tan(THREE.MathUtils.degToRad(camera.fov) / 2));
   if (!simOnly) snow.update(t, _v0.set(camera.position.x, 0, camera.position.z), G.storm, G.weather);
   hudDt += dt;
   if (G.state !== 'title' && G.state !== 'ending' && !simOnly) { // HUD (DOM + minimap canvas) once per rendered frame, with the summed dt
@@ -1632,10 +1644,10 @@ function debugAPI() {
     G, player, CONFIG, renderer, world, santa, scene, camera, post, get hud() { return hud; }, get nav() { return nav; },
     get state() { return G.state; },
     cosmetics, progress, showUnlocks, openWardrobe, closeWardrobe, WD, lb, openBoard, closeBoard, tryLook: (ids) => { const L = cosmetics.look(); for (const id of ids) { const it = BY_ID[id]; L[it.slot] = it; } applyLook(santa, L); return Object.values(L).map(i => i.id); },
-    resolveWindows: async (rects) => { const { resolveWindows } = await import('./interiors.js?v=77728b1a'); const out = {}; for (const b of world.buildings) { if (!b.isGLB || out[b.type] || !rects[b.type]) continue; out[b.type] = resolveWindows(b.holder.children[0], b.holder, rects[b.type]); } return out; },
-    facadeShots: async (side = 0, mask = false) => { const { facadeShot } = await import('./interiors.js?v=77728b1a'); const out = {}; for (const b of world.buildings) { if (!b.isGLB || out[b.type]) continue; out[b.type] = facadeShot(b.holder.children[0], b.holder, renderer, side, 48, mask); } return out; },
+    resolveWindows: async (rects) => { const { resolveWindows } = await import('./interiors.js?v=41faccfa'); const out = {}; for (const b of world.buildings) { if (!b.isGLB || out[b.type] || !rects[b.type]) continue; out[b.type] = resolveWindows(b.holder.children[0], b.holder, rects[b.type]); } return out; },
+    facadeShots: async (side = 0, mask = false) => { const { facadeShot } = await import('./interiors.js?v=41faccfa'); const out = {}; for (const b of world.buildings) { if (!b.isGLB || out[b.type]) continue; out[b.type] = facadeShot(b.holder.children[0], b.holder, renderer, side, 48, mask); } return out; },
     // dev: detect lit window rects on each Tripo building type (output -> assets/windows.js)
-    detectWindows: async () => { const { detectWindows } = await import('./interiors.js?v=77728b1a'); const out = {}; for (const b of world.buildings) { if (!b.isGLB || out[b.type]) continue; const o = b.holder.children[0]; out[b.type] = detectWindows(o, b.holder, renderer); } return out; },
+    detectWindows: async () => { const { detectWindows } = await import('./interiors.js?v=41faccfa'); const out = {}; for (const b of world.buildings) { if (!b.isGLB || out[b.type]) continue; const o = b.holder.children[0]; out[b.type] = detectWindows(o, b.holder, renderer); } return out; },
     start: (lv = 0) => { G.qaMute = true; initAudio(false); startLevel(lv); },
     // stage beatability: road-graph route estimate vs timer for one stage (i) or all of them
     routeCheck: (i = null) => { const sp = spawnPoint(); const one = k => routeCheck(graph, planStage(world, graph, k, sp), sp); return i == null ? CONFIG.levels.map((_, k) => one(k)) : one(i); },
@@ -1663,6 +1675,8 @@ function debugAPI() {
     build: new URL(import.meta.url).searchParams.get('v') || 'dev', // cache-bust stamp (tools/bump-version.mjs)
     audio: () => audioStatus(),
     audioOffline: (sec = 20, legacy = false, rate = 2.2) => renderEndingOffline(sec, legacy, rate),
+    // QA: what the touch haze tuning resolved to (null fields on desktop)
+    hazeInfo: () => ({ mobile: !!Q.mobile, ios: !!Q.ios, fogStart: ML?.fogStart ?? 0, fog: scene.fog.density, snowPxK: snow?.uniforms.uPxK.value, snowMinPx: snow?.uniforms.uMinPx.value, proj: Snow.proj, cones: fxs.cones ? LOOK.lampShaftIntensity * (ML?.lampShafts ?? 1) : null, post: post.weatherPost === CONFIG.weather.post ? 'desktop' : 'mobile' }),
     nanView: on => { post.nanView(on); return !!post.sanitize; },
     // QA: drive the perf-tier controller with a synthetic frame rate (secs of 0.5 s ticks), returns safety()
     tierSim: (fps, secs = 1) => { const on = SAFE.on; SAFE.on = true; try { for (let i = 0; i < secs * 2; i++) safetyNet(0.5, 1000 / fps); } finally { SAFE.on = on; } return window.__xmas.safety(); },

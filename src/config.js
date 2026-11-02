@@ -276,6 +276,26 @@ export const CONFIG = {
     lampShaftIntensity: 0.12,
   },
   bloom: { strength: 0.7, radius: 0.5, threshold: 0.85 },
+  // Phones / tablets only (Q.mobile; desktop never reads this). The same night scene on a 6" screen read as fog
+  // ("terlalu berkabut"): LOW (the touch 'auto' pick) fogged from 0 m with a 0.026 exp2 floor (~46% fog at 30 m),
+  // snow flakes are sized in drawing-buffer px so on a ~390-630 px tall phone buffer they cover 2-4x more of the
+  // screen than on desktop (big soft discs), and HIGH's bloom chain at 0.4 of a 1x buffer is coarse and wide.
+  mobileLook: {
+    fogStart: 10,          // m: exp2 fog starts here (desktop: 0) - near/mid street stays crisp, the far town still fogs
+    lowFogMin: 0.030,      // LOW fog floor with the 10 m start: still ~93% fog at the 64 m draw distance (was 0.026 from 0 m)
+    post: {                // weather post (bloom) on touch: tighter, weaker, only real highlights glow
+      clear: { bloomStrength: 0.30, bloomRadius: 0.16, bloomThreshold: 0.97, dofBlurPx: 1.4 },
+      storm: { bloomStrength: 0.40, bloomRadius: 0.26, bloomThreshold: 0.93, dofBlurPx: 2.4 },
+    },
+    // snow: flake px *= clamp((proj / pxRef) ^ pxExp, pxMin, 1), proj = buffer height / (2 tan(fov/2)); pxRef ~ a
+    // Retina laptop. Flakes stay >= minPx (alpha scaled down instead) and fade in from nearFade[0..1] m
+    snow: { pxRef: 1170, pxExp: 0.5, pxMin: 0.45, minPx: 1.5, nearFade: [0.8, 4.5], nearLayerOpacity: 0.55 },
+    lampShafts: 0.6,       // volumetric lamp cone intensity multiplier
+    // additive lamp glow (the orange wash right around the camera): ground light pools / door pools / head halos
+    // opacity multipliers; halo point size is also kept at desktop screen scale in portrait (three sizes points by
+    // buffer height only, so a 76 deg portrait fov made them ~1.4x larger against the scene than at 58 deg)
+    glow: { lampPools: 0.55, doorPools: 0.75, halos: 0.6, haloFovComp: true },
+  },
   // ---------------------------------------------------------------- performance
   performance: {
     targetFps: 60,              // dynamic resolution (all presets) + quality governor (auto only) aim for this
@@ -285,7 +305,7 @@ export const CONFIG = {
     // (~3.3 MP on a 1512x982 @2x Safari window, x4 MSAA) while an iPhone on HIGH draws ~0.35-1.3 MP with no MSAA;
     // 2.8 MP keeps a 13-16" Retina laptop at ~1.3-1.4 device px per CSS px. ULTRA (beauty) keeps 4.2 MP.
     maxPixels: { desktop: 2.8e6, high: 2.8e6, medium: 2.2e6, ultra: 4.2e6, mobile: 2.0e6 },
-    ios: { maxPixelRatio: 1.0, maxPixels: 1.3e6, msaa: 0, shadowMapSize: 512, bloomScale: 0.4 }, // iPhone/iPad Safari: lighter still (tile GPU memory, thermal throttling, jetsam kills)
+    ios: { maxPixelRatio: 1.0, maxPixels: 1.3e6, msaa: 0, shadowMapSize: 512, bloomScale: 0.5 }, // bloom 0.5 (was 0.4: a blocky, over-wide glow on a 1x buffer). iPhone/iPad Safari: lighter still (tile GPU memory, thermal throttling, jetsam kills)
     mobile: { maxPixelRatio: 1.5, ao: false, dof: false, msaa: 2, shadowMapSize: 1024 }, // always applied on touch devices
     shadowFrustum: 28,          // half-size (m) of the moon shadow box around the player
     viewCull: true, viewCullNear: 40, // MEDIUM/HIGH: whole-map instanced props kept within 40 m (shadow box) or inside the view cone

@@ -1,23 +1,24 @@
 // Snow, gift flights (gossip), mump2p light shards + trails, particle bursts, fireworks (Optimum logo).
 import * as THREE from 'three';
-import { glowTexture } from './util.js?v=77728b1a';
-import { logoPoints } from './logo.js?v=77728b1a';
-import { giftBox } from './props.js?v=77728b1a';
+import { glowTexture } from './util.js?v=41faccfa';
+import { logoPoints } from './logo.js?v=41faccfa';
+import { giftBox } from './props.js?v=41faccfa';
 
 // ------------------------------------------------------------------ snow
 export class Snow {
   /** opts: layered snow — near bokeh flakes / main / far fine dust */
-  constructor(scene, count, { box = 70, h = 40, size = 0.16, opacity = 0.85, speed = 1, soft = 0 } = {}) {
-    this.box = box; this.h = h; this.o = { size, speed, opacity };
+  constructor(scene, count, { box = 70, h = 40, size = 0.16, opacity = 0.85, speed = 1, soft = 0, mobile = null } = {}) {
+    this.box = box; this.h = h; this.o = { size, speed, opacity, mobile }; // mobile: CONFIG.mobileLook.snow (touch only)
     const pos = new Float32Array(count * 3), seed = new Float32Array(count);
     for (let i = 0; i < count; i++) { pos[i * 3] = Math.random() * this.box; pos[i * 3 + 1] = Math.random() * this.h; pos[i * 3 + 2] = Math.random() * this.box; seed[i] = Math.random(); }
     const g = new THREE.BufferGeometry();
     g.setAttribute('position', new THREE.BufferAttribute(pos, 3));
     g.setAttribute('aSeed', new THREE.BufferAttribute(seed, 1));
-    this.uniforms = { uTime: { value: 0 }, uCenter: { value: new THREE.Vector3() }, uWind: { value: new THREE.Vector2(0.6, 0.3) }, uSpeed: { value: 2.2 }, uBox: { value: this.box }, uH: { value: this.h }, uSize: { value: size }, uOpacity: { value: opacity }, uSoft: { value: soft }, uMap: { value: glowTexture() }, uDensity: { value: 1 } };
+    this.uniforms = { uTime: { value: 0 }, uCenter: { value: new THREE.Vector3() }, uWind: { value: new THREE.Vector2(0.6, 0.3) }, uSpeed: { value: 2.2 }, uBox: { value: this.box }, uH: { value: this.h }, uSize: { value: size }, uOpacity: { value: opacity }, uSoft: { value: soft }, uMap: { value: glowTexture() }, uDensity: { value: 1 }, uPxK: { value: 1 }, uMinPx: { value: 0 }, uNearFade: { value: new THREE.Vector2(0, 3) } };
+    if (mobile) { this.uniforms.uMinPx.value = mobile.minPx; this.uniforms.uNearFade.value.fromArray(mobile.nearFade); }
     const m = new THREE.ShaderMaterial({
       uniforms: this.uniforms, transparent: true, depthWrite: false,
-      vertexShader: `attribute float aSeed; uniform float uTime,uSpeed,uBox,uH,uSize,uDensity; uniform vec3 uCenter; uniform vec2 uWind; varying float vA;
+      vertexShader: `attribute float aSeed; uniform float uTime,uSpeed,uBox,uH,uSize,uDensity,uPxK,uMinPx; uniform vec3 uCenter; uniform vec2 uWind,uNearFade; varying float vA;
         void main(){
           // weather: only a fraction of the pool falls (clear night = sparse, storm = all), decorrelated from size/speed
           if (fract(aSeed * 7.31 + 0.13) > uDensity) { gl_Position = vec4(2.0, 2.0, 2.0, 1.0); gl_PointSize = 0.0; vA = 0.0; return; }
@@ -31,8 +32,12 @@ export class Snow {
           vec3 w = vec3(o.x + mod(sx - o.x, uBox), p.y, o.z + mod(sz - o.z, uBox));
           vec4 mv = modelViewMatrix*vec4(w,1.0);
           gl_Position = projectionMatrix*mv;
-          gl_PointSize = uSize*(0.6+aSeed)*(420.0/-mv.z);
-          vA = smoothstep(0.0, 3.0, -mv.z);
+          // desktop: uPxK = 1, uMinPx = 0, uNearFade = (0, 3). Touch: smaller flakes on small buffers, kept >= uMinPx px
+          // with the alpha scaled by the lost area, and a longer fade-in right in front of the lens
+          float ps = uSize*(0.6+aSeed)*(420.0*uPxK/-mv.z);
+          float lost = ps < uMinPx ? (ps*ps)/(uMinPx*uMinPx) : 1.0;
+          gl_PointSize = max(ps, uMinPx);
+          vA = smoothstep(uNearFade.x, uNearFade.y, -mv.z) * lost;
         }`,
       fragmentShader: `uniform sampler2D uMap; uniform float uOpacity, uSoft; varying float vA; void main(){ float d = length(gl_PointCoord-0.5); float a = mix(smoothstep(0.5,0.15,d), smoothstep(0.5,0.0,d)*0.8, uSoft); gl_FragColor = vec4(vec3(0.92,0.95,1.0), a*uOpacity*vA); }`,
     });
@@ -48,8 +53,11 @@ export class Snow {
     this.uniforms.uSpeed.value = 2.2 * w.fall * this.o.speed;
     this.uniforms.uWind.value.set(0.4 + w.wind * 9.2, 0.2 + w.wind * 4.1);
     this.uniforms.uSize.value = this.o.size * (1 + storm * 0.4);
+    const M = this.o.mobile; // touch: flake px follow the screen's projection scale (Snow.proj, set by main per frame)
+    if (M && Snow.proj > 0) this.uniforms.uPxK.value = Math.min(1, Math.max(M.pxMin, Math.pow(Snow.proj / M.pxRef, M.pxExp)));
   }
 }
+Snow.proj = 0; // px per unit at 1 m: drawing-buffer height / (2 tan(fov/2))
 
 // ------------------------------------------------------- particle bursts
 export class Particles {
