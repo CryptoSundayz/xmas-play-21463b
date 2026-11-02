@@ -1,10 +1,10 @@
 // Procedural placeholder buildings (10 types). Each faces +Z (door at +Z).
 // Returns { group (static meshes), windowGeos (local), animated:[], footprint, height, door }
 import * as THREE from 'three';
-import { materials } from './materials.js?v=0c77b1e6';
-import { gableGeometry, textTexture, canvasTexture } from './util.js?v=0c77b1e6';
-import { makeLogoMesh } from './logo.js?v=0c77b1e6';
-import { MANIFEST } from '../assets/manifest.js?v=0c77b1e6';
+import { materials } from './materials.js?v=a8da0896';
+import { gableGeometry, textTexture, canvasTexture } from './util.js?v=a8da0896';
+import { makeLogoMesh } from './logo.js?v=a8da0896';
+import { MANIFEST } from '../assets/manifest.js?v=a8da0896';
 
 class B {
   constructor() { this.group = new THREE.Group(); this.windowGeos = []; this.animated = []; this.M = materials(); }

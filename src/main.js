@@ -1,28 +1,29 @@
 // Santa's Block Delivery — game bootstrap, loop and state machine.
 import * as THREE from 'three';
-import { PostFX, loadEnvironment, LampCones, Footprints, SnowPuffs, ChimneySmoke, Sparkles, Shockwaves, Governor } from './fx.js?v=0c77b1e6';
-import { CONFIG, applyUrlOverrides, resolveQuality, difficulty, ethPerBlock, formatEth, comboMult, fmt } from './config.js?v=0c77b1e6';
-import { initAssets } from './assets.js?v=0c77b1e6';
-import { World } from './world.js?v=0c77b1e6';
-import { Interiors } from './interiors.js?v=0c77b1e6';
-import { PineSystem } from './pines.js?v=0c77b1e6';
-import { createSanta } from './santa.js?v=0c77b1e6';
-import { Input } from './input.js?v=0c77b1e6';
-import { HUD } from './hud.js?v=0c77b1e6';
-import { Snow, Particles, Flights, Fireworks } from './effects.js?v=0c77b1e6';
-import { makeLogoMesh, logoSVG } from './logo.js?v=0c77b1e6';
-import { WINDOW_WARM, WINDOW_BLUE } from './materials.js?v=0c77b1e6';
-import { InstanceCuller } from './lowcull.js?v=0c77b1e6';
-import { DynRes } from './dynres.js?v=0c77b1e6';
-import { initAudio, resumeAudio, sfx, music, audioState, configureAudio, audioStatus, renderEndingOffline } from './audio.js?v=0c77b1e6';
-import { progress, starsFor, titleFor } from './progress.js?v=0c77b1e6';
-import { drawScoreCard, showCardUI, hideCardUI } from './scorecard.js?v=0c77b1e6';
-import { cosmetics, SLOTS, ITEMS, BY_ID } from './cosmetics.js?v=0c77b1e6';
-import { applyLook, Trail } from './costume.js?v=0c77b1e6';
-import { createLeaderboard, NAME_MAX } from './leaderboard.js?v=0c77b1e6';
-import { Obstacles, planStage, routeCheck } from './obstacles.js?v=0c77b1e6';
-import { RouteGraph } from './routegraph.js?v=0c77b1e6';
-import { rng, clamp, lerp, damp, angleDamp, angleDiff, glowTexture, textTexture, worldUV } from './util.js?v=0c77b1e6';
+import { PostFX, loadEnvironment, LampCones, Footprints, SnowPuffs, ChimneySmoke, Sparkles, Shockwaves, Governor } from './fx.js?v=a8da0896';
+import { CONFIG, applyUrlOverrides, resolveQuality, difficulty, ethPerBlock, formatEth, comboMult, fmt } from './config.js?v=a8da0896';
+import { initAssets } from './assets.js?v=a8da0896';
+import { World } from './world.js?v=a8da0896';
+import { Interiors } from './interiors.js?v=a8da0896';
+import { PineSystem } from './pines.js?v=a8da0896';
+import { createSanta } from './santa.js?v=a8da0896';
+import { Input } from './input.js?v=a8da0896';
+import { HUD } from './hud.js?v=a8da0896';
+import { Snow, Particles, Flights, Fireworks } from './effects.js?v=a8da0896';
+import { makeLogoMesh, logoSVG } from './logo.js?v=a8da0896';
+import { WINDOW_WARM, WINDOW_BLUE } from './materials.js?v=a8da0896';
+import { InstanceCuller } from './lowcull.js?v=a8da0896';
+import { DynRes } from './dynres.js?v=a8da0896';
+import { HitchLog } from './hitch.js?v=a8da0896';
+import { initAudio, resumeAudio, sfx, music, audioState, configureAudio, audioStatus, renderEndingOffline } from './audio.js?v=a8da0896';
+import { progress, starsFor, titleFor } from './progress.js?v=a8da0896';
+import { drawScoreCard, showCardUI, hideCardUI } from './scorecard.js?v=a8da0896';
+import { cosmetics, SLOTS, ITEMS, BY_ID } from './cosmetics.js?v=a8da0896';
+import { applyLook, Trail } from './costume.js?v=a8da0896';
+import { createLeaderboard, NAME_MAX } from './leaderboard.js?v=a8da0896';
+import { Obstacles, planStage, routeCheck } from './obstacles.js?v=a8da0896';
+import { RouteGraph } from './routegraph.js?v=a8da0896';
+import { rng, clamp, lerp, damp, angleDamp, angleDiff, glowTexture, textTexture, worldUV } from './util.js?v=a8da0896';
 
 applyUrlOverrides();
 const params = new URLSearchParams(location.search);
@@ -34,6 +35,7 @@ if (ML?.fogStart > 0) THREE.ShaderChunk.fog_fragment = THREE.ShaderChunk.fog_fra
   'fogDensity * fogDensity * vFogDepth * vFogDepth', `fogDensity * fogDensity * max( vFogDepth - ${ML.fogStart.toFixed(2)}, 0.0 ) * max( vFogDepth - ${ML.fogStart.toFixed(2)}, 0.0 )`);
 const QA_FIXED_EARLY = !!params.get('qa');
 const DEBUG = params.get('debug') === '1';
+const HL = params.get('hitch') === '1' ? new HitchLog({ ms: +(params.get('hitchMs') || 25) }) : null; // ?hitch=1 frame-spike log (src/hitch.js)
 const B = CONFIG.branding;
 const X = CONFIG.boosted;
 const isTouch = matchMedia('(pointer: coarse)').matches || 'ontouchstart' in window;
@@ -176,12 +178,18 @@ document.addEventListener('visibilitychange', onPageBack);
 addEventListener('pageshow', onPageBack);
 // runtime fallback for weak devices (only when quality = auto)
 const governor = new Governor(!Q.auto || QA_FIXED_EARLY ? [] : [
+  // cheapest first: the moon shadow map is re-rendered every frame while Santa runs (3x the idle rate)
+  { name: 'shadow refresh 1/2', apply: () => { PT.shadowEvery = Math.max(PT.shadowEvery, 2); } },
   { name: 'mascot fur shells + flame light off', apply: () => santa?.lowFx?.() },
   { name: 'DOF off', apply: () => post.setDof(false) },
   { name: 'GTAO off', apply: () => post.setAO(false) },
   { name: 'light shafts + smoke off', apply: () => { if (fxs.cones) fxs.cones.mesh.visible = false; if (fxs.smoke) fxs.smoke.points.visible = false; } },
   { name: 'render scale floor 0.5', apply: () => { PERF.minScale = Math.min(PERF.minScale, 0.5); dynres.min = PERF.minScale; } },
-  { name: 'shadows off', apply: () => { renderer.shadowMap.enabled = false; moon.castShadow = false; scene.traverse(o => { if (o.material) [].concat(o.material).forEach(m => m.needsUpdate = true); }); } },
+  { name: 'shadow map 1024', apply: () => setShadowMap(1024) },
+  // shadows off WITHOUT a recompile: flipping shadowMap.enabled / castShadow changed every lit material's program key
+  // (material.needsUpdate on all of them = a multi-second compile freeze on Safari, then one more per first-seen
+  // material while running past houses). Shadow intensity 0 is a uniform; the map is shrunk and never re-rendered.
+  { name: 'shadows off', apply: () => { moon.shadow.intensity = 0; setShadowMap(256); PT.shadowOff = true; } },
   { name: 'bloom off', apply: () => post.setBloom(false) },
 
 ], { minFps: Math.round(PERF.targetFps * 0.75), window: 3, warmup: 5 });
@@ -196,7 +204,7 @@ const G = {
   gossipBusy: false, hint: '', endingT: 0, lastTick: 0, levelObjects: [],
   combo: 0, bestCombo: 0, lastDeliverT: -1e9, boosted: 0, totalBoosted: 0,
 };
-import { Nav } from './nav.js?v=0c77b1e6';
+import { Nav } from './nav.js?v=a8da0896';
 const _dbs = new THREE.Vector2();
 const player = { pos: new THREE.Vector3(), vel: new THREE.Vector3(), heading: 0, speed: 0, jy: 0, vy: 0, air: false, coyote: 0, jumpBuf: 0, sprintK: 0, holdT: 0, surfY: 0, paved: false };
 const cam = { yaw: 0, pos: new THREE.Vector3(), look: new THREE.Vector3(), dist: CONFIG.camera.distance };
@@ -233,6 +241,8 @@ async function boot() {
   giftHalo = new THREE.Sprite(new THREE.SpriteMaterial({ map: glowTexture(), color: 0x4aa8ff, transparent: true, opacity: 0.35, depthTest: false, depthWrite: false, blending: THREE.AdditiveBlending, fog: false }));
   giftHalo.scale.setScalar(1.6); giftHalo.renderOrder = 5; scene.add(giftHalo);
   input = new Input(canvas); input.onPause = togglePause;
+  input.lockAllowed = () => G.state === 'playing' && !G.wardrobe && $('overlay').classList.contains('hidden');
+  input.onLockChange = locked => { if (locked) lookHint(false); };
   hud = new HUD(world);
   nav = new Nav(scene);
   graph = new RouteGraph(world.roads, CONFIG.world.squareRadius);
@@ -549,6 +559,7 @@ function togglePause() {
 function toTitle() { pickedStage = null; updatePlayLabel(); music.play('title'); clearLevel(); resetVillageLights(); G.state = 'title'; hud.show(false); $('touchUI').classList.add('hidden'); $('title').classList.remove('hidden'); }
 
 function showOverlay(title, text, stats, btn, fn, btn2, fn2) {
+  input?.releaseLock();
   $('ovTitle').textContent = title; $('ovText').innerHTML = text;
   $('ovStats').innerHTML = stats ? stats.map(([k, v]) => `<div><b>${v}</b>${k}</div>`).join('') : '';
   $('ovStats').classList.toggle('hidden', !stats);
@@ -674,6 +685,41 @@ function startLevel(idx) {
   G.state = 'playing';
   hud.toast(`Stage ${idx + 1}/${CONFIG.levels.length}: ${L.name}`, 2.4);
   showIntro(idx);
+  lookHint(true);
+  prewarmGPU();
+}
+
+// one-time desktop hint for pointer-lock mouse-look
+let lookHintT = 0;
+function lookHint(on) {
+  const el = $('lookHint'); if (!el) return;
+  clearTimeout(lookHintT);
+  if (!on) { el.classList.remove('show'); return; }
+  if (!input?.lockOK || input.locked) return;
+  try { if (localStorage.getItem('xmas_lookHint')) return; localStorage.setItem('xmas_lookHint', '1'); } catch (e) { /* private mode: show anyway */ }
+  lookHintT = setTimeout(() => { el.classList.add('show'); lookHintT = setTimeout(() => el.classList.remove('show'), 6000); }, 2600);
+}
+
+// Stage start: compile every material's program and upload every texture now (behind the stage intro), not the first
+// time each object scrolls into view while Santa runs. The scene pass draws into the composer's HDR target (no tone
+// mapping / linear output in the program key), so compile with that target bound, or the programs would not match.
+const _pwTex = new Set();
+function prewarmGPU() {
+  if (CTX.lost || renderer.getContext().isContextLost()) return;
+  const I = renderer.info, n0 = I.programs?.length ?? 0, t0 = I.memory.textures, ts = performance.now();
+  const prev = renderer.getRenderTarget();
+  try {
+    renderer.setRenderTarget(post.enabled && post.scenePass ? post.scenePass.rt : null);
+    renderer.compile(scene, camera);
+  } catch (e) { console.warn('[prewarm] compile', e); }
+  renderer.setRenderTarget(prev);
+  _pwTex.clear();
+  const addTex = v => { if (v && v.isTexture && !v.isRenderTargetTexture) _pwTex.add(v); };
+  scene.traverse(o => { const m = o.material; if (!m) return;
+    for (const mm of Array.isArray(m) ? m : [m]) { for (const k in mm) addTex(mm[k]); const u = mm.uniforms; if (u) for (const k in u) addTex(u[k]?.value); } });
+  for (const tx of _pwTex) { try { if (tx.image || tx.isDataTexture || tx.isCompressedTexture) renderer.initTexture(tx); } catch (e) { /* not uploadable yet */ } }
+  _pwTex.clear();
+  if (HL || DEBUG) console.info(`[prewarm] +${(I.programs?.length ?? 0) - n0} programs, +${I.memory.textures - t0} textures in ${(performance.now() - ts).toFixed(0)} ms`);
 }
 
 const beamMat = new THREE.ShaderMaterial({
@@ -1197,6 +1243,7 @@ const _poolTop = [], _poolScore = new Map(), _poolSlot = [];
 const _sh = { x: 1e9, z: 1e9, n: 0, u: new THREE.Vector3(), v: new THREE.Vector3() };
 function updateShadow(focus) {
   if (!moon.castShadow || !renderer.shadowMap.enabled) return;
+  if (PT.shadowOff) { if (!PT.shadowOffDone) { PT.shadowOffDone = true; renderer.shadowMap.needsUpdate = true; } else renderer.shadowMap.needsUpdate = false; return; }
   const S = CONFIG.performance.shadowFrustum, tex = 2 * S / moon.shadow.mapSize.x;
   // light-space axes (fixed light direction): snap the focus in that basis
   const dir = _v1.set(35, 70, 22).normalize(), u = _sh.u.set(0, 1, 0).cross(dir).normalize(), v = _sh.v.copy(dir).cross(u);
@@ -1429,7 +1476,7 @@ const dynres = new DynRes({ min: PERF.minScale, max: PERF.maxScale, step: 0.05, 
 // to come back within 30 s of an undo holds for 60 s before the next undo. Materials, lights and the art style stay.
 // Off in QA, on LOW, under ?nosafety=1 and ?dynres=0 (fixed measurements). (auto quality uses the feature governor.)
 const SAFE = { on: !Q.auto && Q.name !== 'low' && !QA_FIXED_EARLY && params.get('nosafety') !== '1' && params.get('dynres') !== '0',
-  bad: 0, good: 0, acc: 0, level: 0, steps: [], active: [], skip: new Set(), trial: null, hold: 10, undoneAt: -1e9, clock: 0 };
+  bad: 0, good: 0, acc: 0, level: 0, steps: [], active: [], skip: new Set(), trial: null, hold: 10, undoneAt: -1e9, clock: 0, flips: 0 };
 const SAFE_STEPS = [
   { name: 'shadow refresh 1/2', on: () => { PT.shadowEvery = 2; }, off: () => { PT.shadowEvery = 1; } },
   { name: 'msaa 2x', test: () => (post.samples || 0) > 2, on: () => post.setSamples?.(2), off: () => post.setSamples?.(Math.min(Q.msaa || 0, renderer.capabilities.maxSamples || 0)) },
@@ -1461,11 +1508,15 @@ function safetyNet(d, ema) {
       const i = SAFE_STEPS.findIndex((s, k) => !SAFE.active.includes(k) && !SAFE.skip.has(k) && (!s.test || s.test()));
       if (i < 0) return;
       const s = SAFE_STEPS[i]; s.on(); SAFE.active.push(i); SAFE.level = SAFE.active.length; SAFE.steps.push(s.name);
-      SAFE.trial = { i, fps, t: SAFE.clock }; if (SAFE.clock - SAFE.undoneAt < 30) SAFE.hold = 60;
+      SAFE.trial = { i, fps, t: SAFE.clock }; if (SAFE.clock - SAFE.undoneAt < 30) SAFE.hold = ++SAFE.flips >= 2 ? 1e9 : 60; // 2nd flip: sticky
       console.info(`[perf] tier -> ${s.name} (${fps.toFixed(1)} fps)`);
     }
   } else if (fps > T * 0.97) {
     SAFE.bad = 0;
+    // hysteresis: only frames rendered while Santa runs (the expensive case) may earn a tier back; standing still is
+    // ~3x cheaper, so idle-time headroom used to undo a tier that the next sprint re-applied (msaa / shadow-map RT
+    // re-allocations = hitches, every ~15 s)
+    if (G.state === 'playing' && player.speed < 0.5) return;
     if (++SAFE.good >= SAFE.hold * 2 && SAFE.active.length) {
       const i = SAFE.active.pop(), s = SAFE_STEPS[i]; s.off(); SAFE.level = SAFE.active.length; SAFE.steps.push('undo ' + s.name);
       SAFE.good = 0; SAFE.undoneAt = SAFE.clock; SAFE.hold = 10; console.info('[perf] tier <- ' + s.name);
@@ -1478,7 +1529,9 @@ function perfCtl(d) {
   if (ms > 250) return;
   dyn.ema += (ms - dyn.ema) * 0.08;
   safetyNet(d, dyn.ema);
-  if (dyn.on) dynres.tick(d, (G.state === 'playing' || G.state === 'title') && !document.hidden);
+  // up-probes (each one re-allocates every post target) only from frames that represent play: not while Santa stands
+  // still, whose ~3x cheaper frames made the scale climb at rest and fall again on the next run (flip-flop)
+  if (dyn.on) dynres.tick(d, (G.state === 'playing' || G.state === 'title') && !document.hidden, G.state !== 'playing' || player.speed > 0.5);
 }
 // black-band safety net: every ~2 s read a 12x8 grid of canvas pixels right after the frame; if a wide
 // band of columns on one side is pure black while the rest is lit, twice in a row, switch off the next
@@ -1537,6 +1590,7 @@ function loop() {
   requestAnimationFrame(loop);
   if (G.contextLost) return;
   const d = clock.getDelta();
+  HL?.begin();
   perfCtl(d); debugOverlay(d);
   // rAF timestamps jitter by +-1-2 ms (more on 120 Hz ProMotion / vsync-off Macs). Feeding raw dt makes motion
   // visibly uneven at ~80 fps; a light EMA that snaps on real changes keeps speed exact over time but smooth.
@@ -1546,12 +1600,15 @@ function loop() {
   const dc = Math.min(0.2, d);
   sdt = Math.abs(dc - sdt) > sdt * 0.5 ? dc : sdt + (dc - sdt) * 0.3;
   PT.t0 = performance.now();
+  // mouse-look capture only lives while actually playing (pause, menus, wardrobe, results, share cards drop it)
+  if (input?.locked && (G.state !== 'playing' || G.wardrobe)) input.releaseLock();
   if (QA_FIXED) { frame(1 / 30); return; }
   const n = Math.max(1, Math.ceil(sdt / SUBSTEP - 1e-6)), h = sdt / n;
   if (n > 1) { simOnly = true; try { for (let i = 1; i < n; i++) frame(h); } finally { simOnly = false; } }
   frame(h);
 }
 const SUBSTEP = 1 / 30;
+const _occ = { x0: 0, z0: 0, x1: 0, z1: 0 }; // pines: camera -> Santa occlusion segment (reused, no per-frame object)
 let hudDt = 0;
 function mmState() { const Lv = CONFIG.levels[G.level]; return { player: player.pos, heading: player.heading, camYaw: cam.yaw, targets: G.targets, powerups: G.powerups, ice: G.ice, areaRadius: Lv.areaRadius, areaMin: Lv.areaMin, marks: obstacles.marks(), mump: G.mumpLeft > 0 }; }
 function frame(dt) {
@@ -1575,7 +1632,10 @@ function frame(dt) {
     interiors?.update(t);
     if (world.bulbMat) { const u = world.bulbMat.uniforms; u.uTime.value = t; u.uFog.value = scene.fog?.density ?? 0; u.uFogStart.value = ML?.fogStart ?? 0;
       u.uPx.value = renderer.getDrawingBufferSize(_dbs).y / (2 * Math.tan(THREE.MathUtils.degToRad(camera.fov) / 2)); }
-    pines?.update(camera.position, dt, false, G.state === 'playing' ? { x0: camera.position.x, z0: camera.position.z, x1: player.pos.x, z1: player.pos.z } : null);
+    const tP = HL && performance.now();
+    if (G.state === 'playing') { _occ.x0 = camera.position.x; _occ.z0 = camera.position.z; _occ.x1 = player.pos.x; _occ.z1 = player.pos.z; }
+    pines?.update(camera.position, dt, false, G.state === 'playing' ? _occ : null, shadowInfo());
+    if (HL) { HL.add('pines', tP); HL.flag('pineRebuild', pines?.t === 0); }
     flights.update(dt);
     particles.update(dt);
     fireworks.update(dt, G.state === 'ending');
@@ -1629,10 +1689,15 @@ function frame(dt) {
   const dofFocus = G.state === 'title' ? cam.pos.distanceTo(cam.look) : G.state === 'ending' ? 200 : camDist;
   if (!simOnly) post.update(t, { focus: dofFocus, boost: G.mumpLeft > 0 ? 0.6 + 0.4 * Math.sin(t * 4) : 0, flash: G.flash, storm: G.storm });
   if (simOnly) return;
+  const tC = HL && performance.now();
   culler?.update(dt, camera, shadowInfo());
+  if (HL) { HL.add('culler', tC); HL.flag('cullerRebuild', culler?.t === 0); HL.flag('shadowMap', renderer.shadowMap.needsUpdate); }
   const tR = performance.now(); PT.cpuUpdate += ((tR - PT.t0) - PT.cpuUpdate) * 0.1;
+  if (HL) HL.cur && (HL.cur.s.update = tR - PT.t0);
   post.render();
   PT.cpuRender += ((performance.now() - tR) - PT.cpuRender) * 0.1;
+  if (HL) { HL.add('render', tR); const M = renderer.info; HL.end({ programs: M.programs?.length ?? 0, textures: M.memory.textures, geometries: M.memory.geometries,
+    scale: +dynScale.toFixed(2), tiers: [...governor.applied, ...SAFE.active.map(i => SAFE_STEPS[i].name)].join(','), moving: G.state === 'playing' && player.speed > 0.5, state: G.state }); }
   if (BP.enabled) blackProbe(t); // opt-in (?probe=1): its synchronous readPixels stalled the GPU pipeline every 2 s (periodic hitch)
   music.setBoost(G.state === 'playing' && G.mumpLeft > 0); sfx.wind(G.state === 'playing' || G.state === 'paused' ? (G.storm || 0) : 0.15);
   governor.tick(dt, (G.state === 'playing' || G.state === 'title') && dynAtFloor());
@@ -1644,12 +1709,13 @@ function frame(dt) {
 function debugAPI() {
   return {
     G, player, CONFIG, renderer, world, santa, scene, camera, post, get hud() { return hud; }, get nav() { return nav; },
+    PT, moon, governor, get culler() { return culler; }, get pineSys() { return pines; }, // perf experiments (qa/hitch/*)
     get state() { return G.state; },
     cosmetics, progress, showUnlocks, openWardrobe, closeWardrobe, WD, lb, openBoard, closeBoard, tryLook: (ids) => { const L = cosmetics.look(); for (const id of ids) { const it = BY_ID[id]; L[it.slot] = it; } applyLook(santa, L); return Object.values(L).map(i => i.id); },
-    resolveWindows: async (rects) => { const { resolveWindows } = await import('./interiors.js?v=0c77b1e6'); const out = {}; for (const b of world.buildings) { if (!b.isGLB || out[b.type] || !rects[b.type]) continue; out[b.type] = resolveWindows(b.holder.children[0], b.holder, rects[b.type]); } return out; },
-    facadeShots: async (side = 0, mask = false) => { const { facadeShot } = await import('./interiors.js?v=0c77b1e6'); const out = {}; for (const b of world.buildings) { if (!b.isGLB || out[b.type]) continue; out[b.type] = facadeShot(b.holder.children[0], b.holder, renderer, side, 48, mask); } return out; },
+    resolveWindows: async (rects) => { const { resolveWindows } = await import('./interiors.js?v=a8da0896'); const out = {}; for (const b of world.buildings) { if (!b.isGLB || out[b.type] || !rects[b.type]) continue; out[b.type] = resolveWindows(b.holder.children[0], b.holder, rects[b.type]); } return out; },
+    facadeShots: async (side = 0, mask = false) => { const { facadeShot } = await import('./interiors.js?v=a8da0896'); const out = {}; for (const b of world.buildings) { if (!b.isGLB || out[b.type]) continue; out[b.type] = facadeShot(b.holder.children[0], b.holder, renderer, side, 48, mask); } return out; },
     // dev: detect lit window rects on each Tripo building type (output -> assets/windows.js)
-    detectWindows: async () => { const { detectWindows } = await import('./interiors.js?v=0c77b1e6'); const out = {}; for (const b of world.buildings) { if (!b.isGLB || out[b.type]) continue; const o = b.holder.children[0]; out[b.type] = detectWindows(o, b.holder, renderer); } return out; },
+    detectWindows: async () => { const { detectWindows } = await import('./interiors.js?v=a8da0896'); const out = {}; for (const b of world.buildings) { if (!b.isGLB || out[b.type]) continue; const o = b.holder.children[0]; out[b.type] = detectWindows(o, b.holder, renderer); } return out; },
     start: (lv = 0) => { G.qaMute = true; initAudio(false); startLevel(lv); },
     // stage beatability: road-graph route estimate vs timer for one stage (i) or all of them
     routeCheck: (i = null) => { const sp = spawnPoint(); const one = k => routeCheck(graph, planStage(world, graph, k, sp), sp); return i == null ? CONFIG.levels.map((_, k) => one(k)) : one(i); },

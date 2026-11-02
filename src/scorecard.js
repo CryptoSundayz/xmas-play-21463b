@@ -1,6 +1,6 @@
 // Shareable score card: a 1200x675 PNG drawn on a 2D canvas (mascot portrait captured from the live WebGL view,
 // stage + result + stats + equipped cosmetics + date + play URL), with Download / Share / Post on X actions.
-import { CONFIG, formatEth } from './config.js?v=0c77b1e6';
+import { CONFIG, formatEth } from './config.js?v=a8da0896';
 
 const W = 1200, H = 675;
 const C = { navy: '#050b18', navy2: '#0b1d44', blue: '#51b1fe', blue2: '#8fdcff', red: '#ff4d5e', green: '#3dff9a', gold: '#ffd36b', ink: '#eaf4ff', dim: 'rgba(214,232,255,0.72)' };

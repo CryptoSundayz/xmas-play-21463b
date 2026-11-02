@@ -7,14 +7,44 @@ export class Input {
     addEventListener('keydown', e => {
       if (['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'Space'].includes(e.code)) e.preventDefault();
       this.keys.add(e.code);
+      // Esc while the mouse is captured only releases it (the browser does that); it must not also pause the game
+      if (e.code === 'Escape' && (this.locked || performance.now() - this.unlockT < 300)) return;
       if (e.code === 'Escape' || e.code === 'KeyP') this.onPause?.();
     });
     addEventListener('keyup', e => this.keys.delete(e.code));
     addEventListener('blur', () => this.keys.clear());
-    // mouse drag orbit
+    // mouse drag orbit (fallback when pointer lock is unavailable / denied)
     let drag = null;
-    canvas.addEventListener('pointerdown', e => { if (e.pointerType === 'mouse') { drag = e.clientX; } });
-    addEventListener('pointermove', e => { if (drag !== null && e.pointerType === 'mouse') { this.camDelta += (e.clientX - drag) * 0.006; drag = e.clientX; this.lastManualCam = performance.now(); } });
+    canvas.addEventListener('pointerdown', e => { if (e.pointerType === 'mouse' && !this.locked) { drag = e.clientX; } });
+    addEventListener('pointermove', e => { if (drag !== null && e.pointerType === 'mouse' && !this.locked) { this.camDelta += (e.clientX - drag) * 0.006; drag = e.clientX; this.lastManualCam = performance.now(); } });
+    // desktop mouse-look (Pointer Lock): click the game canvas while playing -> the cursor is captured and plain mouse
+    // movement turns the camera (same axis + direction as dragging). Esc (browser) releases. main.js decides when a
+    // lock is allowed (lockAllowed) and drops it for pause / menus / dialogs (releaseLock). Touch devices: untouched.
+    this.locked = false; this.unlockT = -1e9; this.lockAllowed = null; this.onLockChange = null;
+    this.lockOK = !this.isTouch && typeof canvas.requestPointerLock === 'function';
+    let skip = 0;
+    if (this.lockOK) {
+      canvas.addEventListener('click', e => {
+        if (this.locked || e.button !== 0 || !this.lockAllowed?.()) return;
+        try { const r = canvas.requestPointerLock(); r?.catch?.(() => {}); } catch (err) { /* denied: drag fallback stays */ }
+      });
+      document.addEventListener('pointerlockchange', () => {
+        const was = this.locked; this.locked = document.pointerLockElement === canvas;
+        if (was && !this.locked) this.unlockT = performance.now();
+        drag = null; skip = this.locked ? 2 : 0; // the first move events after locking can carry a bogus jump
+        this.onLockChange?.(this.locked);
+      });
+      document.addEventListener('pointerlockerror', () => { this.locked = false; });
+      document.addEventListener('mousemove', e => {
+        if (!this.locked) return;
+        let dx = e.movementX || 0;
+        if (skip > 0) { skip--; if (Math.abs(dx) > 40) return; }
+        // Safari / some Chrome builds occasionally deliver one huge spurious delta (window edge warp): clamp it
+        if (Math.abs(dx) > 150) return;
+        dx = Math.max(-80, Math.min(80, dx));
+        this.camDelta += dx * 0.0032; this.lastManualCam = performance.now();
+      });
+    }
     addEventListener('pointerup', e => { if (e.pointerType === 'mouse') drag = null; });
     this.setupTouch(canvas);
   }
@@ -63,5 +93,6 @@ export class Input {
     return { x, y };
   }
   get sprint() { return this.keys.has('ShiftLeft') || this.keys.has('ShiftRight'); } // touch: auto-sprint in main.js
+  releaseLock() { if (this.locked || document.pointerLockElement) { try { document.exitPointerLock?.(); } catch (e) { /* ignore */ } } }
   takeCamDelta() { const d = this.camDelta; this.camDelta = 0; const q = (this.keys.has('KeyQ') ? 1 : 0) - (this.keys.has('KeyE') ? 1 : 0); return d + q * 0.035; }
 }

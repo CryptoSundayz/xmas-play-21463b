@@ -12,7 +12,7 @@
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
 <meta name="apple-mobile-web-app-title" content="Block Delivery" />
 <link rel="apple-touch-icon" href="assets/icons/apple-touch-icon.png" />
-<link rel="stylesheet" href="style.css?v=0c77b1e6" />
+<link rel="stylesheet" href="style.css?v=a8da0896" />
 <script type="importmap">
 { "imports": { "three": "./vendor/three/three.module.js", "three/addons/": "./vendor/three/addons/", "three-mesh-bvh": "./vendor/three-mesh-bvh/index.module.js" } }
 </script>
@@ -51,6 +51,7 @@
   <div id="intro" class="hidden"></div>
   <div id="stormWarn">❄ SNOWSTORM — visibility low</div>
   <div id="holdHint"></div>
+  <div id="lookHint">Click to look around · Esc to release</div>
   <button id="pauseBtn" title="Pause">II</button>
   <button id="muteBtn" class="hudBtn" title="Mute (M)" aria-label="Mute">🔊</button>
   <button id="fsBtn" class="hudBtn hidden" title="Fullscreen" aria-label="Fullscreen">⛶</button>
@@ -164,6 +165,6 @@
   window.addEventListener('unhandledrejection', function (e) { var r = e.reason; window.__toast('Promise: ' + (r && (r.message || r)) ); });
 })();
 </script>
-<script type="module" src="src/main.js?v=0c77b1e6"></script>
+<script type="module" src="src/main.js?v=a8da0896"></script>
 </body>
 </html>

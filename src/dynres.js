@@ -31,8 +31,9 @@ export class DynRes {
     this.scale = s; this.lastChange = this.t; this.win.length = 0; this.bad = this.good = 0; this.apply(s);
     return true;
   }
-  /** dt: real frame delta (s). active=false (menus, paused, loading): keep state, collect nothing. */
-  tick(dt, active = true) {
+  /** dt: real frame delta (s). active=false (menus, paused, loading): keep state, collect nothing.
+   *  upOk=false: measure and step down as usual, but no up-probe (frames not representative of the load). */
+  tick(dt, active = true, upOk = true) {
     const ms = dt * 1000; if (ms > 0) this.t += Math.min(dt, 0.25);
     if (!active) { this.win.length = 0; this.bad = this.good = 0; return; }
     if (!(ms > 0) || ms > 120 || this.t - this.lastChange < 0.35) return;
@@ -66,7 +67,7 @@ export class DynRes {
     } else if (fps >= T * 0.95) {
       this.bad = 0;
       const ceil = this.t < this.ceilUntil ? this.ceil : this.max;
-      if (++this.good >= 4 && this.scale < ceil - 1e-6) { if (this._set(this.scale + this.step, 'headroom')) this.lastUp = this.t; }
+      if (++this.good >= 4 && upOk && this.scale < ceil - 1e-6) { if (this._set(this.scale + this.step, 'headroom')) this.lastUp = this.t; }
     } else { this.bad = 0; this.good = 0; }
   }
 }

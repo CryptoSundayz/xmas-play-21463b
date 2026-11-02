@@ -3,7 +3,7 @@
 // One near InstancedMesh + one impostor InstancedMesh per variant, refilled from the camera position a few
 // times a second -> ~4 draw calls for every pine in the world, and only nearby pines go into the shadow map.
 import * as THREE from 'three';
-import { rng } from './util.js?v=0c77b1e6';
+import { rng } from './util.js?v=a8da0896';
 
 const H = 9; // reference tree height (m); instance scale multiplies it (same convention as the old Tripo pine)
 
@@ -182,7 +182,7 @@ function impostorGeometry(I) {
 export class PineSystem {
   /** trees: [{x, z, s, sy, r}] */
   constructor(scene, renderer, trees, { variants = 2, nearRange = 58, msaa = 4, shadows = true } = {}) {
-    this.trees = trees; this.nearRange = nearRange; this.t = 1e9; this.last = new THREE.Vector2(1e9, 1e9);
+    this.trees = trees; this.nearRange = nearRange; this.t = 1e9; this.last = new THREE.Vector2(1e9, 1e9); this.shLast = new THREE.Vector3(1e9, 0, 1e9); this.occKey = 0;
     const atlas = paintAtlas(), mat = needleMaterial(atlas, msaa);
     this.mat = mat;
     this.vars = [];
@@ -200,7 +200,12 @@ export class PineSystem {
       near.count = 0; far.count = 0;
       scene.add(near, far);
       geo.computeBoundingBox(); const bb = geo.boundingBox;
-      this.vars.push({ geo, I, list, mats, near, far, triNear: geo.index.count / 3, rad: Math.max(bb.max.x - bb.min.x, bb.max.z - bb.min.z) * 0.5 });
+      const V = { geo, I, list, mats, near, far, triNear: geo.index.count / 3, rad: Math.max(bb.max.x - bb.min.x, bb.max.z - bb.min.z) * 0.5, h: bb.max.y, shN: -1 };
+      if (shadows) { // moon shadow pass: only the compacted in-box prefix (see update)
+        near.onBeforeShadow = () => { V.saved = near.count; if (V.shN >= 0 && V.shN < near.count) near.count = V.shN; };
+        near.onAfterShadow = () => { near.count = V.saved; };
+      }
+      this.vars.push(V);
     }
     this.triPerTree = this.vars[0].triNear;
   }
@@ -209,31 +214,48 @@ export class PineSystem {
   /** occ = {x0, z0, x1, z1}: camera -> Santa segment. Trees whose crown overlaps it (or holds the camera) are
    *  dropped from the draw so a pine never fills the screen / hides Santa; they come back once clear. */
   occluded(occ) {
-    if (!occ) return '';
-    const { x0, z0, x1, z1 } = occ, dx = x1 - x0, dz = z1 - z0, l2 = dx * dx + dz * dz || 1; let key = '';
-    for (let v = 0; v < this.vars.length; v++) { const V = this.vars[v]; V.hide = V.hide || new Set(); V.hide.clear();
-      V.list.forEach((t, i) => {
-        const r = V.rad * t.s + 0.35, ex = t.x - x0, ez = t.z - z0; if (ex * ex + ez * ez > l2 + 4 * r * r + 40) return;
+    // allocation-free: hidden trees go into a reused per-variant array; the returned key is a numeric hash of the set
+    if (!occ) return 0;
+    const { x0, z0, x1, z1 } = occ, dx = x1 - x0, dz = z1 - z0, l2 = dx * dx + dz * dz || 1; let key = 0;
+    for (let v = 0; v < this.vars.length; v++) {
+      const V = this.vars[v], L = V.list; if (!V.hide) { V.hide = new Uint8Array(L.length); V.hid = []; }
+      for (let j = 0; j < V.hid.length; j++) V.hide[V.hid[j]] = 0; V.hid.length = 0;
+      for (let i = 0; i < L.length; i++) {
+        const t = L[i], r = V.rad * t.s + 0.35, ex = t.x - x0, ez = t.z - z0; if (ex * ex + ez * ez > l2 + 4 * r * r + 40) continue;
         const k = Math.max(0, Math.min(1, (ex * dx + ez * dz) / l2)), qx = ex - dx * k, qz = ez - dz * k;
-        if (qx * qx + qz * qz < r * r && k < 0.92) { V.hide.add(i); key += v + ':' + i + ','; }
-      });
+        if (qx * qx + qz * qz < r * r && k < 0.92) { V.hide[i] = 1; V.hid.push(i); key = (Math.imul(key ^ (v * 7919 + i + 1), 2654435761) + 0x9e3779b9) | 0; }
+      }
     }
     return key;
   }
-  update(camPos, dt = 0, force = false, occ = null) {
+  /** shadow (optional): { c: shadow box centre, u, v: light-space unit axes, half }. Near trees inside the box (+ pad)
+   *  are compacted first and only that prefix is drawn in the moon shadow pass (onBeforeShadow count swap). */
+  update(camPos, dt = 0, force = false, occ = null, shadow = null) {
     this.t += dt;
     const ok = this.occluded(occ); if (ok !== this.occKey) { this.occKey = ok; force = true; }
-    if (!force && this.t < 0.25 && this.last.distanceToSquared(new THREE.Vector2(camPos.x, camPos.z)) < 36) return;
-    this.t = 0; this.last.set(camPos.x, camPos.z);
-    const R2 = this.nearRange * this.nearRange;
+    const shMoved = shadow && (this.shLast.x - shadow.c.x) ** 2 + (this.shLast.z - shadow.c.z) ** 2 > 9;
+    if (!force && !shMoved && this.t < 0.25 && (this.last.x - camPos.x) ** 2 + (this.last.y - camPos.z) ** 2 < 36) return;
+    this.t = 0; this.last.set(camPos.x, camPos.z); if (shadow) this.shLast.copy(shadow.c);
+    const R2 = this.nearRange * this.nearRange, sh = shadow, H = sh ? sh.half + 6 : 0;
     for (const V of this.vars) {
-      const na = V.near.instanceMatrix.array, fa = V.far.instanceMatrix.array; let n = 0, f = 0;
-      V.list.forEach((t, i) => {
-        if (V.hide && V.hide.has(i)) return;
-        const d2 = (t.x - camPos.x) ** 2 + (t.z - camPos.z) ** 2;
-        if (d2 < R2) { na.set(V.mats.subarray(i * 16, i * 16 + 16), n * 16); n++; }
-        else { fa.set(V.mats.subarray(i * 16, i * 16 + 16), f * 16); f++; }
-      });
+      const na = V.near.instanceMatrix.array, fa = V.far.instanceMatrix.array, L = V.list, M = V.mats, hide = V.hide;
+      let n = 0, f = 0;
+      // pass 1: near trees inside the shadow box (front of the buffer), pass 2: the other near trees, far impostors
+      for (let pass = sh ? 0 : 1; pass < 2; pass++) {
+        for (let i = 0; i < L.length; i++) {
+          if (hide && hide[i]) continue;
+          const t = L[i], d2 = (t.x - camPos.x) ** 2 + (t.z - camPos.z) ** 2;
+          if (d2 >= R2) { if (pass === 1) { fa.set(M.subarray(i * 16, i * 16 + 16), f * 16); f++; } continue; }
+          let inBox = false;
+          if (sh) {
+            const hy = V.h * t.s * (t.sy ?? 1) * 0.5, ex = t.x - sh.c.x, ey = (t.y ?? 0) + hy - sh.c.y, ez = t.z - sh.c.z, pad = Math.max(V.rad * t.s, hy) + 0.5;
+            inBox = Math.abs(ex * sh.u.x + ey * sh.u.y + ez * sh.u.z) < H + pad && Math.abs(ex * sh.v.x + ey * sh.v.y + ez * sh.v.z) < H + pad;
+          }
+          if ((pass === 0) === inBox) { na.set(M.subarray(i * 16, i * 16 + 16), n * 16); n++; }
+        }
+        if (pass === 0) V.shN = n;
+      }
+      if (!sh) V.shN = -1;
       V.near.count = n; V.far.count = f;
       V.near.instanceMatrix.needsUpdate = true; V.far.instanceMatrix.needsUpdate = true;
       V.near.computeBoundingSphere(); V.far.computeBoundingSphere();
