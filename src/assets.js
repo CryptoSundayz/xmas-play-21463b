@@ -4,8 +4,8 @@ import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 import { KTX2Loader } from 'three/addons/loaders/KTX2Loader.js';
 import { MeshoptDecoder } from 'three/addons/libs/meshopt_decoder.module.js';
 import * as SkeletonUtils from 'three/addons/utils/SkeletonUtils.js';
-import { MANIFEST } from '../assets/manifest.js?v=41faccfa';
-import { CONFIG } from './config.js?v=41faccfa';
+import { MANIFEST } from '../assets/manifest.js?v=0c77b1e6';
+import { CONFIG } from './config.js?v=0c77b1e6';
 
 // Tripo GLBs are meshopt-compressed with KTX2 (UASTC/ETC1S) textures.
 const loader = new GLTFLoader();

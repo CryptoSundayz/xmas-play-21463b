@@ -87,5 +87,9 @@ export const MANIFEST = {
     // Tripo snowplow (front faces +Z); obstacles.js instances it, places beacon/headlight glows at these local points
     snowplow:      { glb: 'assets/models/prop_snowplow.glb',       fit: { height: 2.36 }, instanced: true, zOffset: 0.2,
                      beacon: [0, 2.36, 0.47], headlights: [[-0.68, 1.05, 2.1], [0.68, 1.05, 2.1]] },
+    // Tripo clockwork grinch (front +Z, no rig): bots x1 + boss x2.4, code-animated in src/grinch.js. Height-normalised
+    // landmarks: crown = hat-trim centre [x, y, z, radius], eyes = glint points (boss only)
+    grinch:        { glb: 'assets/models/enemy_grinch.glb',        fit: { height: 2.4 }, instanced: true,
+                     crown: [-0.005, 0.868, 0.055, 0.145], eyes: [[-0.064, 0.79, 0.165], [0.07, 0.79, 0.165]] },
   },
 };

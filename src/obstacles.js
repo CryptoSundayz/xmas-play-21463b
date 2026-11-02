@@ -4,10 +4,11 @@
 // is built; Obstacles builds light meshes (merged / instanced: 1-2 draw calls per obstacle type) and runs them.
 import * as THREE from 'three';
 import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
-import { CONFIG, difficulty } from './config.js?v=41faccfa';
-import { rng, lerp, clamp, textTexture, glowTexture } from './util.js?v=41faccfa';
-import { MANIFEST, bakedMeshes } from './assets.js?v=41faccfa';
-import { planRoute } from './routegraph.js?v=41faccfa';
+import { CONFIG, difficulty } from './config.js?v=0c77b1e6';
+import { rng, lerp, clamp, textTexture, glowTexture } from './util.js?v=0c77b1e6';
+import { MANIFEST, bakedMeshes } from './assets.js?v=0c77b1e6';
+import { planRoute } from './routegraph.js?v=0c77b1e6';
+import { grinchMaterial, stepWalk, attachMatrix, addWalkAttribute } from './grinch.js?v=0c77b1e6';
 
 const TAU = Math.PI * 2;
 const hyp = Math.hypot;
@@ -238,6 +239,7 @@ export class Obstacles {
     for (const o of this.objs) { o.parent?.remove(o); o.traverse(m => { m.geometry?.dispose(); for (const x of [].concat(m.material || [])) { if (x.map && x.map !== _barrierTex && !x.userData.sharedMaps) x.map.dispose(); x.dispose(); } }); }
     this.objs = []; this.plows = []; this.balls = []; this.bots = []; this.lag = []; this.fences = []; this.barriers = [];
     this.boss = null; this.wind = null; this.gust = { x: 0, z: 0, k: 0, warn: 0 }; this.world.dyn.length = 0; this.lagMat = null; this.lampMat = null; this.beaconMat = null;
+    this.botMesh = null; this.botMeshes = null; this.botWalk = null; this.botLean = null;
     this.plowMesh = null; this.plowParts = null; this.plowBeacon = null; this.plowGlow = null; this.plowHalo = null; this.plowPools = null;
   }
   surf(x, z) { return this.world.surfaceAt(x, z).y; }
@@ -353,27 +355,77 @@ export class Obstacles {
       m.castShadow = shadow; m.frustumCulled = false; m.name = 'snowballs'; this.add(m); this.ballMesh = m;
       for (const b of plan.snowballs) this.balls.push({ ...b, road: W.roads[b.ri], s: -1, wait: b.delay, rot: new THREE.Quaternion(), x: 0, z: 0, y: -50, r: 0.6 });
     }
-    // ---- grinch bots (+ boss)
+    // ---- grinch bots (+ boss): enemy_grinch.glb instanced (1 draw for all bots, + shadow), code-animated (src/grinch.js);
+    // the procedural capsule bot is only the GLB-load-failure fallback
+    const GE = MANIFEST.props.grinch, GH = GE?.fit?.height || 2.4;
+    const grinchParts = (lod) => { const parts = GE && bakedMeshes(GE, { lod }); return parts && parts.length ? parts : null; };
     const nb = plan.grinch.length;
     if (nb) {
-      const body = new THREE.InstancedMesh(grinchGeometry(), new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.7 }), nb);
-      const eyes = new THREE.InstancedMesh(grinchEyes(), new THREE.MeshBasicMaterial({ color: new THREE.Color(2.6, 0.2, 0.15), toneMapped: false }), nb);
-      body.castShadow = shadow; body.frustumCulled = eyes.frustumCulled = false; body.name = 'grinch'; this.add(body); this.add(eyes);
-      this.botMesh = body; this.botEyes = eyes;
-      for (const s of plan.grinch) this.bots.push({ hx: s.x, hz: s.z, x: s.x, z: s.z, yaw: 0, state: 'idle', rest: 0, ph: Math.random() * 9, wa: Math.random() * TAU });
+      const parts = grinchParts(this.low ? 1 : 0);
+      this.botMeshes = []; this.botWalk = this.botLean = null;
+      if (parts) {
+        let A = null;
+        for (const { geometry, material } of parts) {
+          if (!A) { A = addWalkAttribute(geometry, nb); this.botWalk = A.walk; this.botLean = A.lean; }
+          else { geometry.setAttribute('aWalk', A.walk); geometry.setAttribute('aLean', A.lean); }
+          const G = grinchMaterial(material, { H: GH });
+          const im = new THREE.InstancedMesh(geometry, G.material, nb); im.customDepthMaterial = G.depth;
+          im.castShadow = shadow; im.frustumCulled = false; im.name = 'grinch'; this.add(im); this.botMeshes.push(im);
+        }
+      } else {
+        const body = new THREE.InstancedMesh(grinchGeometry(), new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.7 }), nb);
+        const eyes = new THREE.InstancedMesh(grinchEyes(), new THREE.MeshBasicMaterial({ color: new THREE.Color(2.6, 0.2, 0.15), toneMapped: false }), nb);
+        body.castShadow = shadow; body.frustumCulled = eyes.frustumCulled = false; body.name = 'grinch'; this.add(body); this.add(eyes);
+        this.botMeshes.push(body, eyes);
+      }
+      this.botMesh = this.botMeshes[0];
+      for (const s of plan.grinch) this.bots.push({ hx: s.x, hz: s.z, x: s.x, z: s.z, yaw: 0, state: 'idle', rest: 0, ph: Math.random() * 9, wa: Math.random() * TAU,
+        // visual-only state (walk cycle, smoothed facing, lean, steal spin): never feeds back into movement/collision
+        px: s.x, pz: s.z, spd: 0, walk: { ph: Math.random() * TAU, amp: 0, run: 0 }, vy: 0, yr: 0, lagF: 0, stealT: 0 });
     }
     if (plan.boss) {
       const g = new THREE.Group(); g.name = 'boss';
-      const body = new THREE.Mesh(grinchGeometry(), new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.6, color: 0xbfe0b0 }));
-      const eyes = new THREE.Mesh(grinchEyes(), new THREE.MeshBasicMaterial({ color: new THREE.Color(3, 0.3, 0.1), toneMapped: false }));
-      const crown = []; for (let k = 0; k < 5; k++) { const c = new THREE.ConeGeometry(0.09, 0.3, 4); c.translate(Math.cos(k / 5 * TAU) * 0.26, 2.05, Math.sin(k / 5 * TAU) * 0.26); crown.push(colorize(c, 0xffc83a)); }
-      const band = new THREE.CylinderGeometry(0.3, 0.3, 0.14, 12, 1, true); band.translate(0, 1.9, 0); crown.push(colorize(band, 0xffb21a));
-      const cm = new THREE.Mesh(merge(crown), new THREE.MeshStandardMaterial({ vertexColors: true, metalness: 0.8, roughness: 0.3, emissive: 0x331d00 }));
-      g.add(body, eyes, cm); g.scale.setScalar(2.4); body.castShadow = shadow;
+      const parts = grinchParts(this.low ? 1 : 0); let crownY = 1.95, crown0 = [0, 0], crownR = 0.26, eyeAt = null;
+      if (parts) {
+        let A = null;
+        for (const { geometry, material } of parts) {
+          if (!A) A = addWalkAttribute(geometry, 1); else { geometry.setAttribute('aWalk', A.walk); geometry.setAttribute('aLean', A.lean); }
+          const G = grinchMaterial(material, { H: GH, boss: true });
+          const im = new THREE.InstancedMesh(geometry, G.material, 1); im.setMatrixAt(0, new THREE.Matrix4()); im.customDepthMaterial = G.depth;
+          im.castShadow = shadow; im.frustumCulled = false; im.name = 'bossBody'; g.add(im); (g.userData.mats ||= []).push(G.uniforms);
+        }
+        g.userData.walk = A.walk; g.userData.lean = A.lean;
+        const C = GE.crown; crown0 = [C[0] * GH, C[2] * GH]; crownY = C[1] * GH; crownR = C[3] * GH; eyeAt = GE.eyes.map(e => [e[0] * GH, e[1] * GH, (e[2] + 0.03) * GH]); // glints sit just proud of the eye surface
+      } else {
+        const body = new THREE.Mesh(grinchGeometry(), new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.6, color: 0xbfe0b0 }));
+        const eyes = new THREE.Mesh(grinchEyes(), new THREE.MeshBasicMaterial({ color: new THREE.Color(3, 0.3, 0.1), toneMapped: false }));
+        g.add(body, eyes); body.castShadow = shadow;
+      }
+      // crown: centred on the hat trim (GLB) / on the head (fallback); a coronet of 5 points around a band
+      const crown = []; const ch = crownR * 1.05;
+      for (let k = 0; k < 5; k++) { const a = k / 5 * TAU + Math.PI / 2, c = new THREE.ConeGeometry(crownR * 0.3, ch, 4); c.rotateY(Math.PI / 4 - a); c.translate(crown0[0] + Math.cos(a) * crownR, crownY + crownR * 0.25 + ch / 2, crown0[1] + Math.sin(a) * crownR); crown.push(colorize(c, 0xffc83a)); }
+      const band = new THREE.CylinderGeometry(crownR * 1.06, crownR, crownR * 0.5, 20, 1, true); band.translate(crown0[0], crownY, crown0[1]); crown.push(colorize(band, 0xffb21a));
+      for (let k = 0; k < 5; k++) { const a = k / 5 * TAU + Math.PI / 2, j = new THREE.SphereGeometry(crownR * 0.11, 6, 4); j.translate(crown0[0] + Math.cos(a) * crownR * 1.07, crownY, crown0[1] + Math.sin(a) * crownR * 1.07); crown.push(colorize(j, k % 2 ? 0x3fd06a : 0xff3a3a)); }
+      const cm = new THREE.Mesh(merge(crown), new THREE.MeshStandardMaterial({ vertexColors: true, metalness: 0.85, roughness: 0.45, emissive: 0x2a1600, side: THREE.DoubleSide }));
+      cm.name = 'bossCrown'; g.add(cm); g.userData.crown = cm; g.userData.crownBase = [crown0[0], crownY, crown0[1]];
+      if (eyeAt) { // small, tight eye glints (the texture eyes already glow through the material); 1 draw
+        const pg = new THREE.BufferGeometry(); pg.setAttribute('position', new THREE.Float32BufferAttribute(eyeAt.flat(), 3));
+        const pm = new THREE.PointsMaterial({ size: 0.36, map: glowTexture(), color: new THREE.Color(1.6, 0.25, 0.1), transparent: true, depthWrite: false, blending: THREE.AdditiveBlending, sizeAttenuation: true, toneMapped: false });
+        pm.userData.sharedMaps = true; const eyes = new THREE.Points(pg, pm); eyes.frustumCulled = false; eyes.name = 'bossEyes'; g.add(eyes); g.userData.eyes = eyes; g.userData.eyeY = eyeAt[0][1];
+      }
+      g.scale.setScalar(2.4);
       g.position.set(plan.boss.x, this.surf(plan.boss.x, plan.boss.z), plan.boss.z); this.add(g);
+      // aura: a soft ground ring under the boss (no body-shell clone, so nothing speckles through the model);
+      // the body itself carries a red fresnel rim (uAura) that swells with the telegraph
+      const aura = new THREE.Mesh(new THREE.RingGeometry(0.35, 1, 48, 1).rotateX(-Math.PI / 2), new THREE.ShaderMaterial({
+        uniforms: { uK: { value: 0.5 }, uC: { value: new THREE.Color(1.0, 0.18, 0.12) } }, transparent: true, depthWrite: false, blending: THREE.AdditiveBlending, toneMapped: false,
+        vertexShader: 'varying vec2 vP; void main() { vP = position.xz; gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0); }',
+        fragmentShader: 'uniform float uK; uniform vec3 uC; varying vec2 vP; void main() { float r = length(vP); float a = smoothstep(0.35, 0.62, r) * (1.0 - smoothstep(0.62, 1.0, r)); gl_FragColor = vec4(uC * a * uK, 1.0); }' }));
+      aura.renderOrder = 2; aura.name = 'bossAura'; this.add(aura);
       const wave = new THREE.Mesh(new THREE.RingGeometry(0.92, 1, 64).rotateX(-Math.PI / 2), new THREE.MeshBasicMaterial({ color: new THREE.Color(2.4, 0.35, 0.3), transparent: true, depthWrite: false, blending: THREE.AdditiveBlending, toneMapped: false }));
       wave.visible = false; wave.renderOrder = 2; this.add(wave);
-      this.boss = { g, x: plan.boss.x, z: plan.boss.z, yaw: 0, awake: false, slamT: CONFIG.obstacles.boss.slamEvery, tele: 0, wave, waveT: -1, wx: 0, wz: 0, rest: 0, roared: false };
+      this.boss = { g, x: plan.boss.x, z: plan.boss.z, yaw: 0, awake: false, slamT: CONFIG.obstacles.boss.slamEvery, tele: 0, wave, waveT: -1, wx: 0, wz: 0, rest: 0, roared: false,
+        aura, px: plan.boss.x, pz: plan.boss.z, spd: 0, walk: { ph: 0, amp: 0, run: 0 }, slamK: 0 };
     }
     if (plan.wind) { const Wd = O.wind; this.wind = { next: lerp(Wd.every[0], Wd.every[1], Math.random()) + 4, phase: 'idle', t: 0 }; }
   }
@@ -384,6 +436,37 @@ export class Obstacles {
   inLag(x, z) { return this.speedMult(x, z, false) < 1; }
 
   /** ctx {player:{pos, jy, air}, t, levelTime, playing} -> wind push vector in this.gust */
+  /** Grinch bot look (visual only): walk cycle from ground distance (no foot skate), chase hop + squash-stretch, lean,
+   *  smoothed turning with a lean into the turn, hip sway/twist, idle sneak bob, spin + pop on a steal, flee wobble. */
+  _botPose(i, b, dt, t, m4, q, v, sc) {
+    const wrap = a => Math.atan2(Math.sin(a), Math.cos(a)), k8 = 1 - Math.exp(-8 * dt);
+    const moved = hyp(b.x - b.px, b.z - b.pz); b.px = b.x; b.pz = b.z;
+    if (dt > 0) b.spd += (Math.min(moved / dt, 12) - b.spd) * k8;
+    const run = clamp(b.spd / CONFIG.obstacles.grinch.speed, 0, 1), flee = b.state === 'flee';
+    // stride from ground speed (grinch.js stepWalk): amp = stride size, run = walk -> bouncy goblin run (flight phase)
+    const W = stepWalk(b.walk, Math.min(moved, 1), dt, 2.4, clamp(b.spd / 3, 0, 1), run);
+    const dy = wrap(b.yaw - b.vy) * (1 - Math.exp(-12 * dt)); b.vy += dy; b.yr += ((dt > 0 ? dy / dt : 0) - b.yr) * k8;
+    const ph = W.ph, amp = W.amp, s1 = Math.sin(ph), idle = clamp(1 - b.spd / 1.5, 0, 1), br = Math.sin(t * 2.6 + b.wa);
+    // squash at mid-stance (u = st/2 of each step), sneaky crouch + breathing when standing; scaled from the feet so they stay grounded
+    let sy = (1 - amp * (0.025 + 0.04 * run) * Math.max(0, Math.cos(2 * ph - 2 * Math.PI * W.st))) * (1 - idle * (0.05 - 0.018 * br)), pop = 1, jump = 0, spin = 0;
+    if (b.stealT > 0) { b.stealT = Math.max(0, b.stealT - dt); const k = 1 - b.stealT / 0.75;
+      spin = (1 - (1 - k) ** 3) * TAU; pop = 1 + 0.3 * Math.sin(Math.PI * Math.min(1, k * 1.7)) * (1 - k * 0.5); jump = Math.sin(Math.PI * k) * 0.65; }
+    // upper body (shader, around the hip): forward lean with speed (negative pitch = forward), hunch when idle, hip sway, turn lean
+    let roll = clamp(-b.yr * 0.06, -0.22, 0.22) + s1 * 0.07 * amp + idle * 0.03 * Math.sin(t * 1.3 + b.wa), yaw = b.vy + spin + s1 * 0.08 * amp;
+    const pitch = -(0.06 + 0.2 * run) * amp - idle * (0.14 + 0.02 * br) - (flee ? 0.08 : 0);
+    if (flee) { roll += Math.sin(b.ph * 13) * 0.13; yaw += Math.sin(b.ph * 6.5) * 0.16; }
+    b.lagF += (run * 0.7 + (b.stealT > 0 ? 0.6 : 0) - b.lagF) * (1 - Math.exp(-5 * dt));
+    if (this.botWalk) {
+      this.botWalk.setXYZW(i, ph, amp, W.run, W.st);
+      this.botLean.setXYZW(i, pitch, roll, b.lagF + Math.cos(2 * ph - 2 * Math.PI * W.st) * 0.18 * amp, clamp(-b.yr * 0.3, -1, 1) - s1 * 0.25 * amp);
+    }
+    if (!this.botWalk) { this._eg ||= new THREE.Euler(0, 0, 0, 'YXZ'); q.setFromEuler(this._eg.set(-pitch * 0.6, yaw, roll, 'YXZ')); } // procedural fallback bot
+    else q.setFromAxisAngle(v.set(0, 1, 0), yaw);
+    const sx = pop / Math.sqrt(sy);
+    m4.compose(v.set(b.x, this.surf(b.x, b.z) + jump, b.z), q, sc.set(sx, sy * pop, sx));
+    for (const im of this.botMeshes) im.setMatrixAt(i, m4);
+  }
+
   update(dt, ctx) {
     const O = CONFIG.obstacles, p = ctx.player.pos, jy = ctx.player.jy, playing = ctx.playing, t = ctx.t;
     const m4 = this._m4, q = this._q, v = this._v, sc = this._s;
@@ -464,15 +547,14 @@ export class Obstacles {
           const want = Math.atan2(dx, dz); b.yaw += Math.atan2(Math.sin(want - b.yaw), Math.cos(want - b.yaw)) * (1 - Math.exp(-8 * dt)); }
         if (b.state === 'chase' && dp < 1.25 && jy < 1.1) {
           this.onHit('grinch', { nx: (p.x - b.x) / (dp || 1), nz: (p.z - b.z) / (dp || 1), steal: G0.steal, msg: 'A grinch bot stole' , who: b });
-          b.state = 'flee'; b.rest = G0.rest;
+          b.state = 'flee'; b.rest = G0.rest; b.hitNow = true;
         }
       }
-      const hop = b.state === 'chase' ? Math.abs(Math.sin(b.ph * 9)) * 0.18 : Math.abs(Math.sin(b.ph * 3)) * 0.06;
-      this._e.set(0, b.yaw, b.state === 'chase' ? Math.sin(b.ph * 9) * 0.12 : 0); q.setFromEuler(this._e);
-      m4.compose(v.set(b.x, this.surf(b.x, b.z) + hop, b.z), q, sc.set(1, 1, 1));
-      this.botMesh.setMatrixAt(i, m4); this.botEyes.setMatrixAt(i, m4);
+      if (b.hitNow) { b.hitNow = false; b.stealT = 0.75; }
+      this._botPose(i, b, dt, t, m4, q, v, sc);
     }
-    if (this.botMesh) { this.botMesh.instanceMatrix.needsUpdate = true; this.botEyes.instanceMatrix.needsUpdate = true; }
+    for (const im of this.botMeshes || []) im.instanceMatrix.needsUpdate = true;
+    if (this.botWalk) this.botWalk.needsUpdate = this.botLean.needsUpdate = true;
     // --- boss
     const B = this.boss, OB = O.boss;
     if (B) {
@@ -498,8 +580,29 @@ export class Obstacles {
         if (playing && !B.hitWave && Math.abs(d - r) < 1.0 && jy < 0.4) { B.hitWave = true; this.onHit('wave', { nx: (p.x - B.wx) / (d || 1), nz: (p.z - B.wz) / (d || 1), steal: OB.slamSteal, msg: 'Shockwave! Lost' }); }
         if (k >= 1) B.waveT = -1;
       }
-      const squash = B.tele > 0 ? 1 - 0.25 * (1 - B.tele / 0.9) : 1, bob = B.awake ? Math.abs(Math.sin(t * 5)) * 0.25 : 0;
-      B.g.position.set(B.x, this.surf(B.x, B.z) + bob, B.z); B.g.rotation.y = B.yaw; B.g.scale.set(2.4 / Math.sqrt(squash), 2.4 * squash, 2.4 / Math.sqrt(squash));
+      const squash = B.tele > 0 ? 1 - 0.25 * (1 - B.tele / 0.9) : 1; // telegraph crouch (unchanged)
+      const moved = hyp(B.x - B.px, B.z - B.pz); B.px = B.x; B.pz = B.z;
+      if (dt > 0) B.spd += (Math.min(moved / dt, 12) - B.spd) * (1 - Math.exp(-8 * dt));
+      const run = clamp(B.spd / OB.speed, 0, 1), teleK = B.tele > 0 ? 1 - B.tele / 0.9 : 0;
+      // heavy stomp: its own (x2.4) stride from world distance, walking gait with double support (run 0.2)
+      const W = stepWalk(B.walk, Math.min(moved, 2) / 2.4, dt, 2.4, B.tele > 0 ? 0 : clamp(B.spd / 3, 0, 1) * 0.95, 0.2 * run), s1 = Math.sin(W.ph);
+      B.slamK = B.waveT >= 0 ? Math.max(0, 1 - B.waveT / 0.5) : Math.max(0, B.slamK - dt * 2);
+      const stomp = 1 - W.amp * 0.035 * Math.max(0, Math.cos(2 * W.ph - 2 * Math.PI * W.st)), breathe = B.awake ? 1 : 1 + 0.02 * Math.sin(t * 1.8);
+      B.g.position.set(B.x, this.surf(B.x, B.z), B.z); B.g.rotation.order = 'YXZ';
+      B.g.rotation.set(0, B.yaw + s1 * 0.06 * W.amp, 0);
+      B.g.scale.set(2.4 / Math.sqrt(squash), 2.4 * squash * stomp * breathe, 2.4 / Math.sqrt(squash));
+      if (B.g.userData.walk) {
+        const U = B.g.userData, lean = B.lean ||= [0, 0, 0, 0];
+        lean[0] = -0.12 * run * W.amp + 0.16 * teleK - 0.2 * B.slamK; lean[1] = s1 * 0.06 * W.amp;
+        lean[2] = run * 0.45 - teleK * 0.5 + Math.cos(2 * W.ph - 2 * Math.PI * W.st) * 0.15 * W.amp; lean[3] = -s1 * 0.2 * W.amp;
+        U.walk.setXYZW(0, W.ph, W.amp, W.run, W.st); U.lean.setXYZW(0, ...lean); U.walk.needsUpdate = U.lean.needsUpdate = true;
+        // the crown and eye glints ride the deformed head (same lean / lag / lift as the shader)
+        for (const [o, y] of [[U.crown, U.crownBase[1]], [U.eyes, U.eyeY]]) if (o) { o.matrixAutoUpdate = false; attachMatrix(o.matrix, W, lean, y / 2.4, 2.4); }
+      }
+      for (const U of B.g.userData.mats || []) U.uAura.value = 0.22 * teleK + 0.15 * B.slamK;
+      const A = B.aura, pulse = 0.5 + 0.5 * Math.sin(t * 3.1);
+      A.position.set(B.x, this.surf(B.x, B.z) + 0.07, B.z); A.scale.setScalar(3.4 + 0.25 * pulse + 1.4 * teleK);
+      A.material.uniforms.uK.value = (B.awake ? 0.38 + 0.12 * pulse : 0.16) + 0.9 * teleK + 0.6 * B.slamK;
     }
     // --- wind gusts
     const Wn = this.wind, Gs = this.gust;
