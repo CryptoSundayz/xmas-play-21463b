@@ -1,20 +1,20 @@
 // Village generation: ground, sky, roads, square, lake, buildings, lamps, forest, colliders, light pool.
 import * as THREE from 'three';
 import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
-import { CONFIG } from './config.js?v=a8da0896';
-import { rng, worldUV, glowTexture, textTexture } from './util.js?v=a8da0896';
-import { materials, windowMaterial, WINDOW_WARM, cloneTex } from './materials.js?v=a8da0896';
-import { buildProcedural, BUILDING_WEIGHTS } from './buildings.js?v=a8da0896';
-import { pineGeometry, lampGeometries, christmasTree, snowman, bench, giftPile, sleigh, reindeer } from './props.js?v=a8da0896';
-import { MANIFEST, instantiate, bakedMeshes, addTextureGlow } from './assets.js?v=a8da0896';
-import { makeLogoMesh } from './logo.js?v=a8da0896';
-import { findChimney } from './fx.js?v=a8da0896';
-import { WINDOWS, DOORS, SIGNS } from '../assets/windows.js?v=a8da0896';
-import { SurfaceBVH, SurfaceField, rayGap } from './attach.js?v=a8da0896';
-import { buildShopSign } from './signs.js?v=a8da0896';
+import { CONFIG } from './config.js?v=58fd74ec';
+import { rng, worldUV, glowTexture, textTexture } from './util.js?v=58fd74ec';
+import { materials, windowMaterial, WINDOW_WARM, cloneTex } from './materials.js?v=58fd74ec';
+import { buildProcedural, BUILDING_WEIGHTS } from './buildings.js?v=58fd74ec';
+import { pineGeometry, lampGeometries, christmasTree, snowman, bench, giftPile, sleigh, reindeer } from './props.js?v=58fd74ec';
+import { MANIFEST, instantiate, bakedMeshes, addTextureGlow } from './assets.js?v=58fd74ec';
+import { makeLogoMesh } from './logo.js?v=58fd74ec';
+import { findChimney } from './fx.js?v=58fd74ec';
+import { WINDOWS, DOORS, SIGNS } from '../assets/windows.js?v=58fd74ec';
+import { SurfaceBVH, SurfaceField, rayGap } from './attach.js?v=58fd74ec';
+import { buildShopSign } from './signs.js?v=58fd74ec';
 const attachCache = new Map(), lightCache = new Map();
-import { smoothIco, snowBlend, snowSparkle, snowmanVariant, houseDecor, fenceGarland, fbm, hash2, attachedWreath, attachedGarland } from './xmasdeco.js?v=a8da0896';
-import { buildTerrain, conformDecals, makeTracks } from './terrain.js?v=a8da0896';
+import { smoothIco, snowBlend, snowSparkle, snowmanVariant, houseDecor, fenceGarland, fbm, hash2, attachedWreath, attachedGarland } from './xmasdeco.js?v=58fd74ec';
+import { buildTerrain, conformDecals, makeTracks } from './terrain.js?v=58fd74ec';
 const chimneyCache = new Map();
 const eaveCache = new Map();
 const NO_STRING_LIGHTS = new Set(['windmill', 'church']);
@@ -75,6 +75,7 @@ export function eaveProfile(obj, holder, side = 0, opt = {}) {
 // Wet, glossy cobbles with patchy snow settled in the gaps, scattered drifts and a noisy
 // snow edge. mode 0 = road ribbon (uv.x across the road, metres/4), mode 1 = round square.
 export function snowyCobble(mat, mode, size) {
+  const GL = CONFIG.glare?.cobbleGloss ?? { scale: 0.48, min: 0.18 }; // wet-cobble gloss (glare tuning)
   mat.onBeforeCompile = (sh) => {
     sh.uniforms.uMode = { value: mode }; sh.uniforms.uSize = { value: size };
     sh.vertexShader = sh.vertexShader.replace('#include <common>', '#include <common>\nvarying vec3 vSWP; varying vec2 vSUv;')
@@ -104,11 +105,11 @@ export function snowyCobble(mat, mode, size) {
         stone *= 0.72 * (1.0 - gap*0.45);                         // wet = darker, gaps darker still
         vec3 snowC = vec3(0.78,0.83,0.93) * (0.9 + 0.18*n3);
         diffuseColor.rgb = mix(stone, snowC, snowAmt);
-        roughnessFactor = mix(clamp(roughnessFactor*0.48 + gap*0.25, 0.18, 1.0), 0.88, snowAmt);
+        roughnessFactor = mix(clamp(roughnessFactor*${GL.scale.toFixed(3)} + gap*0.25, ${GL.min.toFixed(3)}, 1.0), 0.88, snowAmt);
       }`)
     .replace('#include <normal_fragment_maps>', '#include <normal_fragment_maps>\n normal = normalize(mix(normal, nonPerturbedNormal, snowAmt*0.85));');
   };
-  mat.customProgramCacheKey = () => 'snowyCobble' + mode;
+  mat.customProgramCacheKey = () => 'snowyCobble' + mode + '_' + GL.scale + '_' + GL.min;
 }
 
 const W = CONFIG.world;
@@ -684,7 +685,7 @@ export class World {
       gBox = new THREE.Box3().setFromObject(glb.object); gSize = gBox.getSize(new THREE.Vector3());
       // Tripo textures bake lit windows: make those texels emissive and drive them from winMat
       // (warm by default, blue once the validator has the block, flicker for slow nodes).
-      const glowI = { get value() { return winMat.emissiveIntensity * 1.15; } };
+      const glowI = { get value() { return winMat.emissiveIntensity * CONFIG.glare.facadeGlow; } };
       const seen = new Map();
       glb.object.traverse(o => {
         if (!o.isMesh) return;
@@ -780,7 +781,7 @@ export class World {
     const glbParts = bakedMeshes(MANIFEST.props.streetLamp);
     let instParts;
     if (glbParts) {
-      const lampC = new THREE.Color(0xffc070), lampI = { value: 3.2 };
+      const lampC = new THREE.Color(0xffc070), lampI = { value: CONFIG.glare.lampHeadGlow };
       instParts = glbParts.map(({ geometry, material }) => {
         const m = addTextureGlow(material.clone(), lampC, lampI, 'lampglow');
         const im = new THREE.InstancedMesh(geometry, m, pts.length); im.castShadow = true; return im;
@@ -790,11 +791,11 @@ export class World {
       const { post, head } = lampGeometries();
       const postM = new THREE.InstancedMesh(post, new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.5, metalness: 0.5 }), pts.length);
       postM.castShadow = true;
-      const headMat = new THREE.MeshStandardMaterial({ color: 0x332200, emissive: 0xffc070, emissiveIntensity: 4 });
+      const headMat = new THREE.MeshStandardMaterial({ color: 0x332200, emissive: 0xffc070, emissiveIntensity: 4 * CONFIG.glare.lampHeadGlow / 3.2 });
       instParts = [postM, new THREE.InstancedMesh(head, headMat, pts.length)];
       this.lampHeadY = 4.02;
     }
-    const poolMat = new THREE.MeshBasicMaterial({ map: glowTexture(), color: 0xff9a48, transparent: true, opacity: 0.6, depthWrite: false, blending: THREE.AdditiveBlending, polygonOffset: true, polygonOffsetFactor: -4 });
+    const poolMat = new THREE.MeshBasicMaterial({ map: glowTexture(), color: 0xff9a48, transparent: true, opacity: 0.6 * CONFIG.glare.lampPools, depthWrite: false, blending: THREE.AdditiveBlending, polygonOffset: true, polygonOffsetFactor: -4 });
     const poolM = new THREE.InstancedMesh(new THREE.PlaneGeometry(11, 11).rotateX(-Math.PI / 2), poolMat, pts.length);
     const haloMat = new THREE.MeshBasicMaterial({ map: glowTexture(), color: 0xffb070, transparent: true, opacity: 0.55, depthWrite: false, blending: THREE.AdditiveBlending });
     const m4 = new THREE.Matrix4();
@@ -802,13 +803,13 @@ export class World {
       m4.makeRotationY(Math.atan2(-x, -z) + (i * 2.4)); m4.setPosition(x, 0, z); for (const im of instParts) im.setMatrixAt(i, m4);
       m4.makeTranslation(x, 0.06, z); poolM.setMatrixAt(i, m4);
       this.addCircle(x, z, 0.3);
-      this.lightCandidates.push({ x, y: this.lampHeadY - 0.1, z, color: new THREE.Color(0xffa458), intensity: 46, distance: 20, lamp: true });
+      this.lightCandidates.push({ x, y: this.lampHeadY - 0.1, z, color: new THREE.Color(0xffa458), intensity: CONFIG.glare.lampLight, distance: 20, lamp: true });
     });
     for (const im of instParts) { im.computeBoundingSphere(); this.root.add(im); }
     this.root.add(poolM); this.lampPools = poolM;
     // halos: camera-facing sprites are costly as individual objects -> use Points
     const hg = new THREE.BufferGeometry(); hg.setAttribute('position', new THREE.Float32BufferAttribute(pts.flatMap(([x, z]) => [x, this.lampHeadY, z]), 3));
-    const halos = new THREE.Points(hg, new THREE.PointsMaterial({ map: glowTexture(), color: 0xffb070, size: 2.6, transparent: true, opacity: 0.7, depthWrite: false, blending: THREE.AdditiveBlending, sizeAttenuation: true }));
+    const halos = new THREE.Points(hg, new THREE.PointsMaterial({ map: glowTexture(), color: 0xffb070, size: 2.6, transparent: true, opacity: 0.7 * CONFIG.glare.halos, depthWrite: false, blending: THREE.AdditiveBlending, sizeAttenuation: true }));
     this.root.add(halos); this.lampHalos = halos;
     this.lamps = pts;
   }
@@ -1191,7 +1192,7 @@ export class World {
     heaps.forEach(([x, z, w, h, d, r], i) => { m4.compose(pv.set(x, -0.05, z), q.setFromAxisAngle(up, r), sc.set(w, h, d)); hm.setMatrixAt(i, m4); });
     hm.count = heaps.length; hm.receiveShadow = true; hm.computeBoundingSphere(); this.root.add(hm);
     // warm door pools on the snow (re-baked onto the terrain later)
-    const poolMat = new THREE.MeshBasicMaterial({ map: glowTexture(), color: 0xff9440, transparent: true, opacity: 0.42, depthWrite: false, blending: THREE.AdditiveBlending, polygonOffset: true, polygonOffsetFactor: -4 });
+    const poolMat = new THREE.MeshBasicMaterial({ map: glowTexture(), color: 0xff9440, transparent: true, opacity: 0.42 * CONFIG.glare.doorPools, depthWrite: false, blending: THREE.AdditiveBlending, polygonOffset: true, polygonOffsetFactor: -4 });
     const pm = new THREE.InstancedMesh(new THREE.PlaneGeometry(8, 6).rotateX(-Math.PI / 2), poolMat, Math.max(1, pools.length));
     pools.forEach(([x, z, r], i) => { m4.makeRotationY(r); m4.setPosition(x, 0.07, z); pm.setMatrixAt(i, m4); });
     pm.count = pools.length; pm.computeBoundingSphere(); this.root.add(pm); this.doorPools = pm;

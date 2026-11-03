@@ -9,7 +9,7 @@ import { OutputPass } from 'three/addons/postprocessing/OutputPass.js';
 import { ShaderPass } from 'three/addons/postprocessing/ShaderPass.js';
 import { GTAOPass } from 'three/addons/postprocessing/GTAOPass.js';
 import { RGBELoader } from 'three/addons/loaders/RGBELoader.js';
-import { canvasTexture, glowTexture } from './util.js?v=a8da0896';
+import { canvasTexture, glowTexture } from './util.js?v=58fd74ec';
 
 // ------------------------------------------------------------- environment
 export async function loadEnvironment(renderer, scene, url, intensity) {

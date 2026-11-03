@@ -3,7 +3,7 @@
 // One near InstancedMesh + one impostor InstancedMesh per variant, refilled from the camera position a few
 // times a second -> ~4 draw calls for every pine in the world, and only nearby pines go into the shadow map.
 import * as THREE from 'three';
-import { rng } from './util.js?v=a8da0896';
+import { rng } from './util.js?v=58fd74ec';
 
 const H = 9; // reference tree height (m); instance scale multiplies it (same convention as the old Tripo pine)
 

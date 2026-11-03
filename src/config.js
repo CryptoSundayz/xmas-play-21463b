@@ -210,8 +210,8 @@ export const CONFIG = {
     presetBlend: 1.5,                 // seconds to blend fog/snow/wind when the level (preset) changes
     fogColor: 0x0d1a36, stormFogColor: 0x2b3547,
     post: {
-      clear: { bloomStrength: 0.42, bloomRadius: 0.32, bloomThreshold: 0.92, dofBlurPx: 1.4 },
-      storm: { bloomStrength: 0.55, bloomRadius: 0.45, bloomThreshold: 0.88, dofBlurPx: 2.4 },
+      clear: { bloomStrength: 0.34, bloomRadius: 0.30, bloomThreshold: 1.0, dofBlurPx: 1.4 },   // was 0.42/0.32/0.92 (glare)
+      storm: { bloomStrength: 0.46, bloomRadius: 0.42, bloomThreshold: 0.95, dofBlurPx: 2.4 },  // was 0.55/0.45/0.88
     },
   },
 
@@ -280,12 +280,25 @@ export const CONFIG = {
   // ("terlalu berkabut"): LOW (the touch 'auto' pick) fogged from 0 m with a 0.026 exp2 floor (~46% fog at 30 m),
   // snow flakes are sized in drawing-buffer px so on a ~390-630 px tall phone buffer they cover 2-4x more of the
   // screen than on desktop (big soft discs), and HIGH's bloom chain at 0.4 of a 1x buffer is coarse and wide.
+  // ("pantulan sinar lampu dari rumah2 bikin silau"): house/lamp light glare, all devices. Causes: glossy wet cobbles
+  // (roughness down to 0.18) mirroring the lamp point lights as long orange streaks, the facade texel glow lighting
+  // warm plaster/timber at 1.15x window intensity, bright lamp lantern glow + additive pools/halos, and bloom
+  // thresholds below the emissive levels. Window panes themselves keep their warm 1.9 glow.
+  glare: {
+    cobbleGloss: { scale: 0.62, min: 0.36 }, // wet cobble roughness = clamp(r*scale + gap*0.25, min, 1) (was 0.48 / 0.18)
+    facadeGlow: 0.8,       // GLB facade glowing texels = window emissive * this (was 1.15)
+    glowMax: 1.5,          // cap on texel glow radiance per channel (GLB facades + lamp lanterns)
+    lampHeadGlow: 2.4,     // GLB lamp lantern texel glow (was 3.2); procedural head emissive scales by /3.2
+    lampLight: 32,         // lamp point light intensity (was 46)
+    houseLight: 0.75,      // multiplier on house door point lights (warm/blue/flicker)
+    lampPools: 0.75, doorPools: 0.8, halos: 0.75, // additive glow opacity multipliers (mobileLook.glow stacks on top)
+  },
   mobileLook: {
     fogStart: 10,          // m: exp2 fog starts here (desktop: 0) - near/mid street stays crisp, the far town still fogs
     lowFogMin: 0.030,      // LOW fog floor with the 10 m start: still ~93% fog at the 64 m draw distance (was 0.026 from 0 m)
     post: {                // weather post (bloom) on touch: tighter, weaker, only real highlights glow
-      clear: { bloomStrength: 0.30, bloomRadius: 0.16, bloomThreshold: 0.97, dofBlurPx: 1.4 },
-      storm: { bloomStrength: 0.40, bloomRadius: 0.26, bloomThreshold: 0.93, dofBlurPx: 2.4 },
+      clear: { bloomStrength: 0.26, bloomRadius: 0.16, bloomThreshold: 1.05, dofBlurPx: 1.4 },  // was 0.30/0.16/0.97
+      storm: { bloomStrength: 0.34, bloomRadius: 0.24, bloomThreshold: 1.0, dofBlurPx: 2.4 },   // was 0.40/0.26/0.93
     },
     // snow: flake px *= clamp((proj / pxRef) ^ pxExp, pxMin, 1), proj = buffer height / (2 tan(fov/2)); pxRef ~ a
     // Retina laptop. Flakes stay >= minPx (alpha scaled down instead) and fade in from nearFade[0..1] m
