@@ -1,6 +1,6 @@
 // DOM HUD: score, Gossip vs Optimum comparison, timer, minimap, power-up status.
-import { CONFIG, formatEth, fmt } from './config.js?v=58fd74ec';
-import { logoSVG } from './logo.js?v=58fd74ec';
+import { CONFIG, formatEth, fmt } from './config.js?v=c331d8ef';
+import { logoSVG } from './logo.js?v=c331d8ef';
 
 const $ = id => document.getElementById(id);
 // per-frame HUD text: only touch the DOM when the string changed (a same-value textContent write still replaces the

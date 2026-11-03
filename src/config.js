@@ -160,7 +160,7 @@ export const CONFIG = {
   obstacles: {
     // snowstorm timing/intensity now lives in CONFIG.weather.storm (levels opt in through their weather preset)
     ice: { minRadius: 3.5, maxRadius: 6.5 },
-    slowNode: { flickerHz: 7 },
+    slowNode: { flickerHz: 7, ease: 18, lo: 0.7 }, // window stutter pattern; ease: 1/s smoothing, lo: dim level (was hard 2.2 <-> 0.25)
     // new obstacles (src/obstacles.js). hitInvuln: seconds of mercy after any hit; stun: seconds without control
     hitInvuln: 1.6, stun: 0.45, knockback: 9,
     fence: { h: 1.0, overhang: 1.8, minGap: 14 },                       // jump clears h (jump apex ~1.5 m)
@@ -222,7 +222,12 @@ export const CONFIG = {
   // shop-sign names (crisp code-drawn lettering over the baked AI sign boards); '' = plain board. Church/houses: no text.
   signs: { bakery: 'Bakery', toyWorkshop: 'Toy Workshop', inn: 'Inn', font: "700 {px}px Georgia, 'Times New Roman', 'Palatino Linotype', serif" },
   // house string lights (all quality tiers): roof edges + ridge + door/window frames, one Points draw
-  stringLights: { enabled: true, spacing: 0.15, spacingLow: 0.22, ridge: true, doors: true, windows: true, size: 0.34, intensity: 2.4, minPx: 2.2 },
+  stringLights: { enabled: true, spacing: 0.15, spacingLow: 0.22, ridge: true, doors: true, windows: true, size: 0.34, intensity: 2.4, minPx: 2.2,
+    // anti-shimmer ("setiap lari rumahnya berkilauan"): bulbs a few px wide were drawn as a hard 2-3 px point with a tiny HDR
+    // core, so while the camera moves each one snapped between 4 and 9 lit pixels and its core hit / missed a pixel centre ->
+    // thousands of facade sparkles per second (+ bloom fireflies). Below stablePx they are drawn as a sub-pixel-stable
+    // gaussian (sigma >= sigmaPx, ~0 at the sprite edge) carrying the SAME light energy; above it the old core+halo look.
+    stablePx: 7, sigmaPx: 0.75 },
   world: {
     seed: 1225,
     radius: 150, // playable radius (village ~ r 112, then the forest edge)
@@ -241,6 +246,10 @@ export const CONFIG = {
     lakeCenter: [-112, 70],
     lakeRadii: [20, 14],
   },
+
+  // gameplay particle pool (trails, delivery bursts): fade out closer than fade[1] m to the camera, cap screen size at maxPx
+  // of the buffer height. The Aurora feet-trail cosmetic used to drift through the camera as big soft green blobs.
+  particles: { near: { fade: [1.6, 4.2], maxPx: 0.06 }, auroraGain: 1.4 },
 
   // ---------------------------------------------------------------- quality
   // 'auto' picks low on touch devices / small screens, high otherwise, and then

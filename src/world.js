@@ -1,20 +1,20 @@
 // Village generation: ground, sky, roads, square, lake, buildings, lamps, forest, colliders, light pool.
 import * as THREE from 'three';
 import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
-import { CONFIG } from './config.js?v=58fd74ec';
-import { rng, worldUV, glowTexture, textTexture } from './util.js?v=58fd74ec';
-import { materials, windowMaterial, WINDOW_WARM, cloneTex } from './materials.js?v=58fd74ec';
-import { buildProcedural, BUILDING_WEIGHTS } from './buildings.js?v=58fd74ec';
-import { pineGeometry, lampGeometries, christmasTree, snowman, bench, giftPile, sleigh, reindeer } from './props.js?v=58fd74ec';
-import { MANIFEST, instantiate, bakedMeshes, addTextureGlow } from './assets.js?v=58fd74ec';
-import { makeLogoMesh } from './logo.js?v=58fd74ec';
-import { findChimney } from './fx.js?v=58fd74ec';
-import { WINDOWS, DOORS, SIGNS } from '../assets/windows.js?v=58fd74ec';
-import { SurfaceBVH, SurfaceField, rayGap } from './attach.js?v=58fd74ec';
-import { buildShopSign } from './signs.js?v=58fd74ec';
+import { CONFIG } from './config.js?v=c331d8ef';
+import { rng, worldUV, glowTexture, textTexture } from './util.js?v=c331d8ef';
+import { materials, windowMaterial, WINDOW_WARM, cloneTex } from './materials.js?v=c331d8ef';
+import { buildProcedural, BUILDING_WEIGHTS } from './buildings.js?v=c331d8ef';
+import { pineGeometry, lampGeometries, christmasTree, snowman, bench, giftPile, sleigh, reindeer } from './props.js?v=c331d8ef';
+import { MANIFEST, instantiate, bakedMeshes, addTextureGlow } from './assets.js?v=c331d8ef';
+import { makeLogoMesh } from './logo.js?v=c331d8ef';
+import { findChimney } from './fx.js?v=c331d8ef';
+import { WINDOWS, DOORS, SIGNS } from '../assets/windows.js?v=c331d8ef';
+import { SurfaceBVH, SurfaceField, rayGap } from './attach.js?v=c331d8ef';
+import { buildShopSign } from './signs.js?v=c331d8ef';
 const attachCache = new Map(), lightCache = new Map();
-import { smoothIco, snowBlend, snowSparkle, snowmanVariant, houseDecor, fenceGarland, fbm, hash2, attachedWreath, attachedGarland } from './xmasdeco.js?v=58fd74ec';
-import { buildTerrain, conformDecals, makeTracks } from './terrain.js?v=58fd74ec';
+import { smoothIco, snowBlend, snowSparkle, snowmanVariant, houseDecor, fenceGarland, fbm, hash2, attachedWreath, attachedGarland } from './xmasdeco.js?v=c331d8ef';
+import { buildTerrain, conformDecals, makeTracks } from './terrain.js?v=c331d8ef';
 const chimneyCache = new Map();
 const eaveCache = new Map();
 const NO_STRING_LIGHTS = new Set(['windmill', 'church']);
@@ -908,9 +908,9 @@ export class World {
       const g = new THREE.BufferGeometry();
       g.setAttribute('position', new THREE.BufferAttribute(pos, 3)); g.setAttribute('color', new THREE.BufferAttribute(col, 3)); g.setAttribute('aAux', new THREE.BufferAttribute(aux, 3));
       const mat = new THREE.ShaderMaterial({
-        uniforms: { uTime: { value: 0 }, uPx: { value: 600 }, uSize: { value: SL.size ?? 0.34 }, uGain: { value: SL.intensity ?? 2.4 }, uFog: { value: 0 }, uFogStart: { value: 0 }, uMinPx: { value: SL.minPx ?? 2.2 } },
-        vertexShader: `attribute vec3 aAux; varying vec3 vCol; varying float vI; varying float vCore;
-          uniform float uTime, uPx, uSize, uGain, uFog, uFogStart, uMinPx;
+        uniforms: { uTime: { value: 0 }, uPx: { value: 600 }, uSize: { value: SL.size ?? 0.34 }, uGain: { value: SL.intensity ?? 2.4 }, uFog: { value: 0 }, uFogStart: { value: 0 }, uMinPx: { value: SL.minPx ?? 2.2 }, uStable: { value: SL.stablePx ?? 7 }, uSigma: { value: SL.sigmaPx ?? 0.75 } },
+        vertexShader: `attribute vec3 aAux; varying vec3 vCol; varying float vI; varying float vCore; varying vec4 vG; varying float vSo, vSg;
+          uniform float uTime, uPx, uSize, uGain, uFog, uFogStart, uMinPx, uStable, uSigma;
           float h1(float x){ return fract(sin(x * 91.17) * 43758.5453); }
           void main(){
             vec4 mv = modelViewMatrix * vec4(position, 1.0); gl_Position = projectionMatrix * mv;
@@ -922,15 +922,28 @@ export class World {
             float fd = max(d - uFogStart, 0.0), fog = exp(-uFog * uFog * fd * fd); // uFogStart: touch only (CONFIG.mobileLook)
             float px = uSize * uPx / max(d, 0.1);
             vCore = clamp(px / 9.0, 0.18, 1.0);           // far: the sprite is mostly core
-            gl_PointSize = clamp(px, uMinPx, 72.0);
+            float so = clamp(px, uMinPx, 72.0);           // the old (core + halo) sprite size
+            // small bulbs: energy-matched gaussian (integral of the old profile, fitted) that is ~0 at the sprite edge, so pixel
+            // snapping of the point square / core can no longer make it sparkle while the camera moves (CONFIG.stringLights.stablePx)
+            float ci = 0.0235 / (vCore * vCore), area = so * so * 0.25;
+            float sg = max(uSigma, px * 0.22), inv = 1.0 / (6.2832 * sg * sg);
+            float w = smoothstep(uStable * 0.7, uStable * 1.3, px); // 0 = gaussian, 1 = old look
+            float sz = w > 0.999 ? so : max(so, 6.0 * sg + 2.0);
+            vG = vec4((0.257 + 1.6 * ci) * area * inv, 0.9 * ci * area * inv, sz * 0.5, w); vSo = so * 0.5; vSg = sg;
+            gl_PointSize = sz;
             vCol = color; vI = k * uGain * fog * min(1.0, px / uMinPx);
           }`,
-        fragmentShader: `varying vec3 vCol; varying float vI; varying float vCore;
+        fragmentShader: `varying vec3 vCol; varying float vI; varying float vCore; varying vec4 vG; varying float vSo, vSg;
           void main(){
-            vec2 q = gl_PointCoord * 2.0 - 1.0; float r = length(q); if (r > 1.0) discard;
-            float core = 1.0 - smoothstep(0.10 / vCore * 0.5, 0.22 / vCore * 0.5 + 0.02, r);
-            float halo = pow(max(1.0 - r, 0.0), 2.2) * 0.55;
-            vec3 c = vCol * (halo + core * 1.6) + vec3(1.0, 0.95, 0.85) * core * 0.9;
+            vec2 q = gl_PointCoord * 2.0 - 1.0; float dp = length(q) * vG.z; // distance from the bulb centre in pixels
+            vec3 c = vec3(0.0);
+            if (vG.w < 0.999) { float g = exp(-dp * dp / (2.0 * vSg * vSg)); c = (vCol * vG.x + vec3(1.0, 0.95, 0.85) * vG.y) * g * (1.0 - vG.w); }
+            float r = dp / vSo;
+            if (vG.w > 0.001 && r < 1.0) {
+              float core = 1.0 - smoothstep(0.10 / vCore * 0.5, 0.22 / vCore * 0.5 + 0.02, r);
+              float halo = pow(max(1.0 - r, 0.0), 2.2) * 0.55;
+              c += (vCol * (halo + core * 1.6) + vec3(1.0, 0.95, 0.85) * core * 0.9) * vG.w;
+            }
             gl_FragColor = vec4(c * vI, 1.0);
           }`,
         transparent: true, depthWrite: false, blending: THREE.AdditiveBlending, vertexColors: true,

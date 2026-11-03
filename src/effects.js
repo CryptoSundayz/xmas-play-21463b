@@ -1,8 +1,8 @@
 // Snow, gift flights (gossip), mump2p light shards + trails, particle bursts, fireworks (Optimum logo).
 import * as THREE from 'three';
-import { glowTexture } from './util.js?v=58fd74ec';
-import { logoPoints } from './logo.js?v=58fd74ec';
-import { giftBox } from './props.js?v=58fd74ec';
+import { glowTexture } from './util.js?v=c331d8ef';
+import { logoPoints } from './logo.js?v=c331d8ef';
+import { giftBox } from './props.js?v=c331d8ef';
 
 // ------------------------------------------------------------------ snow
 export class Snow {
@@ -61,7 +61,10 @@ Snow.proj = 0; // px per unit at 1 m: drawing-buffer height / (2 tan(fov/2))
 
 // ------------------------------------------------------- particle bursts
 export class Particles {
-  constructor(scene, max = 3000, size = 0.35) {
+  /** near: { fade: [m0, m1], maxPx } fades particles closer than m1 to the camera (gone by m0) and caps their screen size
+   *  as a fraction of the drawing-buffer height: trail particles left behind a sprinting Santa drift through the camera and
+   *  used to fill the screen as huge soft bokeh blobs (CONFIG.particles.near). */
+  constructor(scene, max = 3000, size = 0.35, near = null) {
     this.max = max; this.n = 0;
     this.pos = new Float32Array(max * 3); this.col = new Float32Array(max * 3);
     this.vel = new Float32Array(max * 3); this.life = new Float32Array(max); this.maxLife = new Float32Array(max);
@@ -71,6 +74,13 @@ export class Particles {
     g.setAttribute('color', new THREE.BufferAttribute(this.col, 3).setUsage(THREE.DynamicDrawUsage));
     this.geo = g;
     this.points = new THREE.Points(g, new THREE.PointsMaterial({ size, map: glowTexture(), vertexColors: true, transparent: true, depthWrite: false, blending: THREE.AdditiveBlending, sizeAttenuation: true, fog: false }));
+    if (near) this.points.material.onBeforeCompile = (sh) => {
+      sh.vertexShader = sh.vertexShader.replace('#include <logdepthbuf_vertex>', `{ float nd = -mvPosition.z;
+          vColor.rgb *= smoothstep(${(+near.fade[0]).toFixed(3)}, ${(+near.fade[1]).toFixed(3)}, nd);
+          gl_PointSize = min(gl_PointSize, scale * ${(2 * near.maxPx).toFixed(4)}); }
+        #include <logdepthbuf_vertex>`);
+    };
+    if (near) this.points.material.customProgramCacheKey = () => `pnear${near.fade}${near.maxPx}`;
     this.points.frustumCulled = false;
     scene.add(this.points);
     this.base = new Float32Array(max * 3);

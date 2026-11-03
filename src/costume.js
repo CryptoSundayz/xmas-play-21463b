@@ -154,8 +154,9 @@ export function applyLook(santa, look) {
 
 /** feet trail: snow sparkle / aurora via the shared Particles pool, gold coins as one small InstancedMesh */
 export class Trail {
-  constructor(scene, particles, quality) {
+  constructor(scene, particles, quality, auroraGain = 2.2) {
     this.p = particles; this.acc = 0; this.k = quality === 'low' ? 0.5 : 1; this.hue = 0;
+    this.auroraGain = auroraGain; // HDR gain of the aurora trail (CONFIG.particles.auroraGain)
     const N = 28; this.N = N;
     const g = new THREE.CylinderGeometry(0.075, 0.075, 0.018, 14); g.rotateX(Math.PI / 2);
     this.coins = new THREE.InstancedMesh(g, new THREE.MeshStandardMaterial({ color: 0xffc23a, metalness: 0.85, roughness: 0.3, emissive: 0x4a2c00 }), N);
@@ -175,7 +176,7 @@ export class Trail {
           const b = 1.2 + Math.random() * 1.2; this.col.setRGB(b * 0.8, b * 0.9, b * 1.1);
           this.p.spawn(pos.x + bx + jx, pos.y + 0.15 + Math.random() * 0.5, pos.z + bz + jz, jx * 0.6, 1.2 + Math.random(), jz * 0.6, this.col, 0.7, 0, 0, 0, 0, 2.5);
         } else if (kind === 'aurora') {
-          this.hue = (this.hue + dt * 0.25 + 0.004) % 1; this.col.setHSL(0.33 + 0.45 * (0.5 + 0.5 * Math.sin(this.hue * 6.283)), 1, 0.55).multiplyScalar(2.2);
+          this.hue = (this.hue + dt * 0.25 + 0.004) % 1; this.col.setHSL(0.33 + 0.45 * (0.5 + 0.5 * Math.sin(this.hue * 6.283)), 1, 0.55).multiplyScalar(this.auroraGain);
           this.p.spawn(pos.x + bx + jx * 0.4, pos.y + 0.4 + Math.random() * 1.1, pos.z + bz + jz * 0.4, jx * 0.2, 2.6 + Math.random() * 0.6, jz * 0.2, this.col, 1.1, 0, 0, 0, 0, 3);
         } else if (kind === 'coins') {
           const c = this.c.find(c => c.life <= 0) || this.c[0];

@@ -4,11 +4,11 @@
 // is built; Obstacles builds light meshes (merged / instanced: 1-2 draw calls per obstacle type) and runs them.
 import * as THREE from 'three';
 import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
-import { CONFIG, difficulty } from './config.js?v=58fd74ec';
-import { rng, lerp, clamp, textTexture, glowTexture } from './util.js?v=58fd74ec';
-import { MANIFEST, bakedMeshes } from './assets.js?v=58fd74ec';
-import { planRoute } from './routegraph.js?v=58fd74ec';
-import { grinchMaterial, stepWalk, attachMatrix, addWalkAttribute } from './grinch.js?v=58fd74ec';
+import { CONFIG, difficulty } from './config.js?v=c331d8ef';
+import { rng, lerp, clamp, textTexture, glowTexture } from './util.js?v=c331d8ef';
+import { MANIFEST, bakedMeshes } from './assets.js?v=c331d8ef';
+import { planRoute } from './routegraph.js?v=c331d8ef';
+import { grinchMaterial, stepWalk, attachMatrix, addWalkAttribute } from './grinch.js?v=c331d8ef';
 
 const TAU = Math.PI * 2;
 const hyp = Math.hypot;

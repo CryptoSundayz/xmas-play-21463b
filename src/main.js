@@ -1,29 +1,29 @@
 // Santa's Block Delivery — game bootstrap, loop and state machine.
 import * as THREE from 'three';
-import { PostFX, loadEnvironment, LampCones, Footprints, SnowPuffs, ChimneySmoke, Sparkles, Shockwaves, Governor } from './fx.js?v=58fd74ec';
-import { CONFIG, applyUrlOverrides, resolveQuality, difficulty, ethPerBlock, formatEth, comboMult, fmt } from './config.js?v=58fd74ec';
-import { initAssets } from './assets.js?v=58fd74ec';
-import { World } from './world.js?v=58fd74ec';
-import { Interiors } from './interiors.js?v=58fd74ec';
-import { PineSystem } from './pines.js?v=58fd74ec';
-import { createSanta } from './santa.js?v=58fd74ec';
-import { Input } from './input.js?v=58fd74ec';
-import { HUD } from './hud.js?v=58fd74ec';
-import { Snow, Particles, Flights, Fireworks } from './effects.js?v=58fd74ec';
-import { makeLogoMesh, logoSVG } from './logo.js?v=58fd74ec';
-import { WINDOW_WARM, WINDOW_BLUE } from './materials.js?v=58fd74ec';
-import { InstanceCuller } from './lowcull.js?v=58fd74ec';
-import { DynRes } from './dynres.js?v=58fd74ec';
-import { HitchLog } from './hitch.js?v=58fd74ec';
-import { initAudio, resumeAudio, sfx, music, audioState, configureAudio, audioStatus, renderEndingOffline } from './audio.js?v=58fd74ec';
-import { progress, starsFor, titleFor } from './progress.js?v=58fd74ec';
-import { drawScoreCard, showCardUI, hideCardUI } from './scorecard.js?v=58fd74ec';
-import { cosmetics, SLOTS, ITEMS, BY_ID } from './cosmetics.js?v=58fd74ec';
-import { applyLook, Trail } from './costume.js?v=58fd74ec';
-import { createLeaderboard, NAME_MAX } from './leaderboard.js?v=58fd74ec';
-import { Obstacles, planStage, routeCheck } from './obstacles.js?v=58fd74ec';
-import { RouteGraph } from './routegraph.js?v=58fd74ec';
-import { rng, clamp, lerp, damp, angleDamp, angleDiff, glowTexture, textTexture, worldUV } from './util.js?v=58fd74ec';
+import { PostFX, loadEnvironment, LampCones, Footprints, SnowPuffs, ChimneySmoke, Sparkles, Shockwaves, Governor } from './fx.js?v=c331d8ef';
+import { CONFIG, applyUrlOverrides, resolveQuality, difficulty, ethPerBlock, formatEth, comboMult, fmt } from './config.js?v=c331d8ef';
+import { initAssets } from './assets.js?v=c331d8ef';
+import { World } from './world.js?v=c331d8ef';
+import { Interiors } from './interiors.js?v=c331d8ef';
+import { PineSystem } from './pines.js?v=c331d8ef';
+import { createSanta } from './santa.js?v=c331d8ef';
+import { Input } from './input.js?v=c331d8ef';
+import { HUD } from './hud.js?v=c331d8ef';
+import { Snow, Particles, Flights, Fireworks } from './effects.js?v=c331d8ef';
+import { makeLogoMesh, logoSVG } from './logo.js?v=c331d8ef';
+import { WINDOW_WARM, WINDOW_BLUE } from './materials.js?v=c331d8ef';
+import { InstanceCuller } from './lowcull.js?v=c331d8ef';
+import { DynRes } from './dynres.js?v=c331d8ef';
+import { HitchLog } from './hitch.js?v=c331d8ef';
+import { initAudio, resumeAudio, sfx, music, audioState, configureAudio, audioStatus, renderEndingOffline } from './audio.js?v=c331d8ef';
+import { progress, starsFor, titleFor } from './progress.js?v=c331d8ef';
+import { drawScoreCard, showCardUI, hideCardUI } from './scorecard.js?v=c331d8ef';
+import { cosmetics, SLOTS, ITEMS, BY_ID } from './cosmetics.js?v=c331d8ef';
+import { applyLook, Trail } from './costume.js?v=c331d8ef';
+import { createLeaderboard, NAME_MAX } from './leaderboard.js?v=c331d8ef';
+import { Obstacles, planStage, routeCheck } from './obstacles.js?v=c331d8ef';
+import { RouteGraph } from './routegraph.js?v=c331d8ef';
+import { rng, clamp, lerp, damp, angleDamp, angleDiff, glowTexture, textTexture, worldUV } from './util.js?v=c331d8ef';
 
 applyUrlOverrides();
 const params = new URLSearchParams(location.search);
@@ -204,7 +204,7 @@ const G = {
   gossipBusy: false, hint: '', endingT: 0, lastTick: 0, levelObjects: [],
   combo: 0, bestCombo: 0, lastDeliverT: -1e9, boosted: 0, totalBoosted: 0,
 };
-import { Nav } from './nav.js?v=58fd74ec';
+import { Nav } from './nav.js?v=c331d8ef';
 const _dbs = new THREE.Vector2();
 const player = { pos: new THREE.Vector3(), vel: new THREE.Vector3(), heading: 0, speed: 0, jy: 0, vy: 0, air: false, coyote: 0, jumpBuf: 0, sprintK: 0, holdT: 0, surfY: 0, paved: false };
 const cam = { yaw: 0, pos: new THREE.Vector3(), look: new THREE.Vector3(), dist: CONFIG.camera.distance };
@@ -272,8 +272,8 @@ async function boot() {
   if (Q.sparkle) fxs.sparkles = new Sparkles(scene, Q.name === 'high' ? 1800 : 1000);
   fxs.waves = new Shockwaves(scene);
   if (Q.name === 'low') applyLow(true);
-  particles = new Particles(scene, 2500, 0.35);
-  trail = new Trail(scene, particles, Q.name);
+  particles = new Particles(scene, 2500, 0.35, CONFIG.particles?.near);
+  trail = new Trail(scene, particles, Q.name, CONFIG.particles?.auroraGain);
   fireworksParticles = new Particles(scene, 7000, 0.9);
   flights = new Flights(scene, particles);
   flights.onImpact = (p) => fxs.waves.spawn(p.clone().setY(0), 3.2, 0.55, 0x6fd0ff);
@@ -1161,9 +1161,12 @@ function updateTargets(dt, t) {
     tg.prog.material.uniforms.uP.value = tg.progress;
     tg.glow.material.opacity = 0.4 + 0.2 * Math.sin(t * 3 + tg.b.id);
     if (tg.slow) {
-      const on = Math.sin(t * CONFIG.obstacles.slowNode.flickerHz * 6.28 + tg.b.id) + Math.sin(t * 13.7) > 0.3;
-      tg.b.winMat.emissiveIntensity = on ? 2.2 : 0.25;
-      tg.b.light.intensity = on ? 14 : 2;
+      const SN = CONFIG.obstacles.slowNode, on = Math.sin(t * SN.flickerHz * 6.28 + tg.b.id) + Math.sin(t * 13.7) > 0.3;
+      // same stuttering on/off pattern, but eased (no hard 0.25 <-> 2.2 strobe of every window + facade glow + interior
+      // + door light from one frame to the next) and never fully dark: reads as a laggy node, not a sparkle (anti-flicker)
+      tg.sk = damp(tg.sk ?? 1, on ? 1 : 0, SN.ease ?? 18, dt); const lo = SN.lo ?? 0.25;
+      tg.b.winMat.emissiveIntensity = lo + (2.2 - lo) * tg.sk;
+      tg.b.light.intensity = 14 * (lo / 2.2) + 14 * (1 - lo / 2.2) * tg.sk;
       tg.gem.material.color.setRGB(on ? 0.3 : 2.2, on ? 1.2 : 1.3, on ? 2.4 : 0.3);
     }
   }
@@ -1461,6 +1464,7 @@ const _v0 = new THREE.Vector3(), _v1 = new THREE.Vector3();
 let lightT = 0, t = 0;
 // ?qa=1: fixed 1/30 s per frame so slow software-GL screenshots are deterministic; advance() steps the sim without rendering
 const QA_FIXED = !!params.get('qa');
+let QA_HOLD = false; // ?qa=1: __xmas.hold(true) stops the rAF loop so renderStep() can capture exact consecutive frames
 let simOnly = false;
 // dynamic resolution (src/dynres.js): every device and preset, off only under ?qa=1 / ?dynres=0. Rolling frame time ->
 // render scale 0.6..1.0 of the budgeted pixel ratio, small rate-limited steps, flip-flop ceiling, and a 'did it help'
@@ -1603,7 +1607,7 @@ function loop() {
   PT.t0 = performance.now();
   // mouse-look capture only lives while actually playing (pause, menus, wardrobe, results, share cards drop it)
   if (input?.locked && (G.state !== 'playing' || G.wardrobe)) input.releaseLock();
-  if (QA_FIXED) { frame(1 / 30); return; }
+  if (QA_FIXED) { if (!QA_HOLD) frame(1 / 30); return; }
   const n = Math.max(1, Math.ceil(sdt / SUBSTEP - 1e-6)), h = sdt / n;
   if (n > 1) { simOnly = true; try { for (let i = 1; i < n; i++) frame(h); } finally { simOnly = false; } }
   frame(h);
@@ -1644,7 +1648,7 @@ function frame(dt) {
     beamMat.uniforms.uT.value = t;
     if (G.state === 'ending') G.endingT += dt;
   }
-  updateCamera(dt, t);
+  if (!PT.qaCamFreeze) updateCamera(dt, t); // QA flicker: frozen camera while Santa keeps running (lighting-only diffs)
   // gift glow + mump2p orbiting shards
   const gp = santa.giftWorldPos(); giftLight.position.copy(gp);
   giftHalo.position.copy(gp); giftHalo.visible = G.state === 'playing' || G.state === 'intro'; giftHalo.material.opacity = (G.mumpLeft > 0 ? 0.5 : 0.3) + Math.sin(t * 3) * 0.05;
@@ -1713,10 +1717,10 @@ function debugAPI() {
     PT, moon, governor, get culler() { return culler; }, get pineSys() { return pines; }, // perf experiments (qa/hitch/*)
     get state() { return G.state; },
     cosmetics, progress, showUnlocks, openWardrobe, closeWardrobe, WD, lb, openBoard, closeBoard, tryLook: (ids) => { const L = cosmetics.look(); for (const id of ids) { const it = BY_ID[id]; L[it.slot] = it; } applyLook(santa, L); return Object.values(L).map(i => i.id); },
-    resolveWindows: async (rects) => { const { resolveWindows } = await import('./interiors.js?v=58fd74ec'); const out = {}; for (const b of world.buildings) { if (!b.isGLB || out[b.type] || !rects[b.type]) continue; out[b.type] = resolveWindows(b.holder.children[0], b.holder, rects[b.type]); } return out; },
-    facadeShots: async (side = 0, mask = false) => { const { facadeShot } = await import('./interiors.js?v=58fd74ec'); const out = {}; for (const b of world.buildings) { if (!b.isGLB || out[b.type]) continue; out[b.type] = facadeShot(b.holder.children[0], b.holder, renderer, side, 48, mask); } return out; },
+    resolveWindows: async (rects) => { const { resolveWindows } = await import('./interiors.js?v=c331d8ef'); const out = {}; for (const b of world.buildings) { if (!b.isGLB || out[b.type] || !rects[b.type]) continue; out[b.type] = resolveWindows(b.holder.children[0], b.holder, rects[b.type]); } return out; },
+    facadeShots: async (side = 0, mask = false) => { const { facadeShot } = await import('./interiors.js?v=c331d8ef'); const out = {}; for (const b of world.buildings) { if (!b.isGLB || out[b.type]) continue; out[b.type] = facadeShot(b.holder.children[0], b.holder, renderer, side, 48, mask); } return out; },
     // dev: detect lit window rects on each Tripo building type (output -> assets/windows.js)
-    detectWindows: async () => { const { detectWindows } = await import('./interiors.js?v=58fd74ec'); const out = {}; for (const b of world.buildings) { if (!b.isGLB || out[b.type]) continue; const o = b.holder.children[0]; out[b.type] = detectWindows(o, b.holder, renderer); } return out; },
+    detectWindows: async () => { const { detectWindows } = await import('./interiors.js?v=c331d8ef'); const out = {}; for (const b of world.buildings) { if (!b.isGLB || out[b.type]) continue; const o = b.holder.children[0]; out[b.type] = detectWindows(o, b.holder, renderer); } return out; },
     start: (lv = 0) => { G.qaMute = true; initAudio(false); startLevel(lv); },
     // stage beatability: road-graph route estimate vs timer for one stage (i) or all of them
     routeCheck: (i = null) => { const sp = spawnPoint(); const one = k => routeCheck(graph, planStage(world, graph, k, sp), sp); return i == null ? CONFIG.levels.map((_, k) => one(k)) : one(i); },
@@ -1755,6 +1759,8 @@ function debugAPI() {
     santaPos: () => player.pos.toArray(),
     drawMap: () => hud.drawMinimap(mmState(), true), // QA: force a minimap redraw now (normal redraws are throttled)
     camYaw: (y) => { if (y !== undefined) { cam.yaw = y; input.lastManualCam = performance.now(); } return { yaw: cam.yaw, dist: +cam.dist.toFixed(2), h: +(cam.h ?? 0).toFixed(2), pos: camera.position.toArray().map(v => +v.toFixed(2)), fov: +camera.fov.toFixed(1), near: camera.near }; },
+    hold: (on = true) => { QA_HOLD = !!on; return QA_HOLD; },
+    renderStep: (dt = 1 / 60) => { frame(dt); }, // one fully rendered frame (qa flicker capture: read the canvas in the same task)
     advance: (sec, step = 1 / 30) => { simOnly = true; try { for (let i = 0; i < Math.round(sec / step); i++) frame(step); } finally { simOnly = false; } return G.state; },
     // one fully rendered frame, all passes (shadow + scene + post): draw calls / triangles / pixel size
     pines: () => pines?.stats(),
